@@ -35,7 +35,12 @@ logging.basicConfig(
 #  DATABASE
 # ─────────────────────────────────────────────
 
-conn   = sqlite3.connect("bot.db", check_same_thread=False)
+# Always use absolute path — prevents creating different bot.db files
+# depending on what directory the bot is launched from
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH   = os.path.join(_BASE_DIR, "bot.db")
+
+conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 
 # WAL mode = much safer writes, survives crashes without data loss
 conn.execute("PRAGMA journal_mode=WAL")
@@ -285,8 +290,17 @@ CREATE TABLE IF NOT EXISTS message_replies (
     status        TEXT    DEFAULT 'unread'
 );
 
-CREATE INDEX IF NOT EXISTS idx_reply_msg  ON message_replies(message_id);
-CREATE INDEX IF NOT EXISTS idx_reply_user ON message_replies(to_user_id);
+CREATE TABLE IF NOT EXISTS message_reply_files (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    reply_id   TEXT,
+    file_id    TEXT,
+    file_type  TEXT,
+    text_content TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_msg   ON message_replies(message_id);
+CREATE INDEX IF NOT EXISTS idx_reply_user  ON message_replies(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_reply_files ON message_reply_files(reply_id);
 """
 cursor.executescript(_v3_script)
 conn.commit()

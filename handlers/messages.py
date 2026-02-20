@@ -37,7 +37,8 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text and not isAdmin(userId):
         try:
             secret = cursor.execute(
-                "SELECT id FROM folders WHERE is_secret=1 AND secret_code=?", (text.strip(),)
+                "SELECT id FROM folders WHERE is_secret=1 AND LOWER(secret_code)=LOWER(?)",
+                (text.strip(),)
             ).fetchone()
         except sqlite3.Error:
             secret = None
@@ -283,7 +284,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toUserId = context.user_data.get("reply_to_user_id")
         msgId    = context.user_data.get("reply_to_msg_id")
 
-        # Collect reply files
+        # Collect reply files — text check must not block media
         fid, ftype, ftxt = None, None, None
         if update.message.video:
             fid, ftype = update.message.video.file_id, "video"
@@ -291,15 +292,18 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fid, ftype = update.message.photo[-1].file_id, "photo"
         elif update.message.document:
             fid, ftype = update.message.document.file_id, "document"
-        elif text and text.upper() != "SEND":
+        elif text and text.upper() not in ("SEND", "CANCEL"):
             ftype, ftxt = "text", text
 
-        if ftype and text and text.upper() != "SEND":
+        if ftype:
             context.user_data.setdefault("reply_files", []).append(
                 {"file_id": fid, "file_type": ftype, "text_content": ftxt}
             )
             cnt = len(context.user_data["reply_files"])
-            await update.message.reply_text(f"<b>Added</b>  |  {cnt} item(s) queued\n\nType <code>SEND</code> when done.", parse_mode="HTML")
+            await update.message.reply_text(
+                f"<b>Added</b>  |  {cnt} item(s) queued\n\nType <code>SEND</code> when done.",
+                parse_mode="HTML"
+            )
             return
 
         if text and text.upper() == "SEND":
@@ -308,17 +312,22 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("<b>Nothing to send.</b> Add some content first, then type SEND.", parse_mode="HTML")
                 return
 
-            # Save reply to DB
+            # Save reply + files to DB
             replyId   = str(uuid.uuid4())[:12]
             adminId   = userId
             adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (adminId,)).fetchone()
             adminName = (adminRow[0] if adminRow else None) or f"Admin {adminId}"
-            combined  = " | ".join(f["text_content"] for f in replyFiles if f.get("text_content")) or None
+            textOnly  = " | ".join(f["text_content"] for f in replyFiles if f.get("text_content")) or None
             try:
                 cursor.execute("""
                     INSERT INTO message_replies (reply_id, message_id, from_admin_id, to_user_id, content, sent_at)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (replyId, msgId, adminId, toUserId, combined, datetime.now().isoformat()))
+                """, (replyId, msgId, adminId, toUserId, textOnly, datetime.now().isoformat()))
+                for rf in replyFiles:
+                    cursor.execute("""
+                        INSERT INTO message_reply_files (reply_id, file_id, file_type, text_content)
+                        VALUES (?, ?, ?, ?)
+                    """, (replyId, rf.get("file_id"), rf["file_type"], rf.get("text_content")))
                 conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"save reply: {e}")
@@ -326,11 +335,11 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.clear()
                 return
 
-            # Send reply content to user
+            # Notify user and deliver content directly
             try:
                 await context.bot.send_message(
                     chat_id=toUserId,
-                    text=f"<b>You Got a Reply</b>\n\n"
+                    text=f"📩 <b>You Got a Reply</b>\n\n"
                          f"<code>{adminName}</code> replied to your message.",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
@@ -338,7 +347,6 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         [InlineKeyboardButton("My Inbox",   callback_data="user_inbox")],
                     ]),
                 )
-                # Also send the actual content
                 for rf in replyFiles:
                     try:
                         if rf["file_type"] == "text":
@@ -350,9 +358,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         elif rf["file_type"] == "document":
                             await context.bot.send_document(chat_id=toUserId, document=rf["file_id"])
                     except Exception as e:
-                        logging.error(f"reply send file: {e}")
+                        logging.error(f"reply deliver: {e}")
             except Exception as e:
-                logging.error(f"reply notify user: {e}")
+                logging.error(f"reply notify: {e}")
 
             context.user_data.clear()
             await update.message.reply_text(

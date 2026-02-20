@@ -27,10 +27,16 @@ def isSuperAdmin(userId: int) -> bool:
 
 
 def isBanned(userId: int) -> bool:
-    row = cursor.execute(
+    # Check both the banned_users table AND the subscribers.banned flag
+    in_ban_table = cursor.execute(
         "SELECT 1 FROM banned_users WHERE user_id=?", (userId,)
+    ).fetchone() is not None
+    if in_ban_table:
+        return True
+    sub_banned = cursor.execute(
+        "SELECT banned FROM subscribers WHERE user_id=?", (userId,)
     ).fetchone()
-    return row is not None
+    return bool(sub_banned and sub_banned[0])
 
 
 # ─────────────────────────────────────────────

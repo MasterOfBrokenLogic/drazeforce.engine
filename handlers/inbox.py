@@ -245,20 +245,40 @@ async def viewReplyCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (fromAdminId,)).fetchone()
     adminName = (adminRow[0] if adminRow else None) or f"Admin {fromAdminId}"
 
-    await safeEdit(query,
-        f"<b>Reply from {adminName}</b>\n\n<code>Received  :  {fmtDt(sentAt)}</code>",
-        markup=None, parse_mode="HTML")
+    # Load reply files
+    files = cursor.execute(
+        "SELECT file_id, file_type, text_content FROM message_reply_files WHERE reply_id=?", (replyId,)
+    ).fetchall()
 
-    if content:
-        await query.message.reply_text(content)
+    await safeEdit(
+        query,
+        f"<b>Reply from {adminName}</b>\n\n<code>Received  :  {fmtDt(sentAt)}</code>",
+        markup=None, parse_mode="HTML"
+    )
+
+    # Send each piece of content
+    for fileId, fileType, textContent in files:
+        try:
+            if fileType == "text":
+                await query.message.reply_text(textContent)
+            elif fileType == "video":
+                await query.message.reply_video(fileId)
+            elif fileType == "photo":
+                await query.message.reply_photo(fileId)
+            elif fileType == "document":
+                await query.message.reply_document(fileId)
+        except Exception as e:
+            logging.error(f"viewReply send: {e}")
 
     await query.message.reply_text(
-        "<b>What would you like to do?</b>",
+        "<b>Actions</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Reply Back", callback_data=f"userreply_{origMsgId}_{fromAdminId}"),
-             InlineKeyboardButton("Delete",     callback_data=f"delreply_{replyId}")],
-            [InlineKeyboardButton("Inbox",      callback_data="user_inbox")],
+            [
+                InlineKeyboardButton("Reply Back", callback_data=f"userreply_{origMsgId}_{fromAdminId}"),
+                InlineKeyboardButton("Delete",     callback_data=f"delreply_{replyId}"),
+            ],
+            [InlineKeyboardButton("Inbox", callback_data="user_inbox")],
         ]),
     )
 
