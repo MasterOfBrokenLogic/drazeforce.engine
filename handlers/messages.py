@@ -43,32 +43,17 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             secret = None
         if secret:
             folderId = secret[0]
-            # Check for folder password first
-            folderRow = cursor.execute(
-                "SELECT password FROM folders WHERE id=?", (folderId,)
-            ).fetchone()
+            # Check for folder password
+            folderRow      = cursor.execute("SELECT password FROM folders WHERE id=?", (folderId,)).fetchone()
             folderPassword = folderRow[0] if folderRow else None
 
-            # Find an active link
-            link = cursor.execute("""
-                SELECT token FROM links
-                WHERE folder_id=? AND revoked=0 AND datetime(expiry) > datetime('now')
-                ORDER BY created_at DESC LIMIT 1
-            """, (folderId,)).fetchone()
-
-            if not link:
-                await update.message.reply_text(
-                    "<b>Secret Access</b>\n\nFolder found but no active link is available.\nContact the administrator.",
-                    parse_mode="HTML",
-                )
-                return
-
+            # Secret folders deliver directly — no link required
             if folderPassword:
                 context.user_data.update({
                     "awaiting_password_verify": True,
                     "verify_folder_id":         folderId,
                     "correct_password":         folderPassword,
-                    "access_token":             link[0],
+                    "access_token":             None,   # secret access — no token
                     "password_attempts":        0,
                 })
                 await update.message.reply_text(
@@ -78,7 +63,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML",
                 )
             else:
-                await _deliverFolder(update, context, folderId, link[0], user)
+                await _deliverFolder(update, context, folderId, None, user)
             return
 
     # ── Broadcast password verification ──────────────────────────────────
