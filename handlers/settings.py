@@ -81,7 +81,7 @@ async def settingsQuotesCallback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     try:
         quotes = cursor.execute(
-            "SELECT id, text, last_sent FROM quotes ORDER BY added_at DESC LIMIT 15"
+            "SELECT id, text, author, last_sent FROM quotes ORDER BY added_at DESC LIMIT 15"
         ).fetchall()
     except sqlite3.Error as e:
         logging.error(f"settingsQuotes: {e}")
@@ -89,9 +89,10 @@ async def settingsQuotesCallback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     lines = [f"<b>Quote Pool</b>  |  {len(quotes)} quote(s)\n"]
-    for qid, text, last_sent in quotes:
-        short = text[:60] + "..." if len(text) > 60 else text
-        lines.append(f"\n<code>[{qid}]</code>  {short}")
+    for qid, text, author, last_sent in quotes:
+        short      = text[:55] + "..." if len(text) > 55 else text
+        author_tag = f"  — {author}" if author else ""
+        lines.append(f"\n<code>[{qid}]</code>  {short}{author_tag}")
 
     await safeEdit(
         query,
@@ -189,7 +190,7 @@ async def _sendQotd(context):
     """Pick a random quote and broadcast it to all subscribers."""
     try:
         quote = cursor.execute(
-            "SELECT id, text FROM quotes ORDER BY RANDOM() LIMIT 1"
+            "SELECT id, text, author FROM quotes ORDER BY RANDOM() LIMIT 1"
         ).fetchone()
         if not quote:
             return
@@ -200,11 +201,9 @@ async def _sendQotd(context):
         logging.error(f"sendQotd: {e}")
         return
 
-    qid, text = quote
-    msg = (
-        f"<b>Quote of the Day</b>\n\n"
-        f"<i>{text}</i>"
-    )
+    qid, text, author = quote
+    author_line = f"\n\n— <i>{author}</i>" if author else ""
+    msg = f"<b>Quote of the Day</b>\n\n<i>{text}</i>{author_line}"
 
     for (uid,) in subs:
         try:
@@ -456,5 +455,47 @@ async def linkstatsViewCallback(update: Update, context: ContextTypes.DEFAULT_TY
         query,
         "\n".join(lines),
         markup=kbBack("settings_linkstats"),
+        parse_mode="HTML",
+    )
+
+
+# ─────────────────────────────────────────────
+#  USER — GET QUOTE (user-facing, no admin needed)
+# ─────────────────────────────────────────────
+
+async def getQuoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User requests a random quote on demand."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        quote = cursor.execute(
+            "SELECT text, author FROM quotes ORDER BY RANDOM() LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error as e:
+        logging.error(f"getQuote: {e}")
+        quote = None
+
+    if not quote:
+        await safeEdit(
+            query,
+            "<b>No Quotes Yet</b>\n\nCheck back soon.",
+            markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Another", callback_data="get_quote")],
+                [InlineKeyboardButton("Back",    callback_data="user_menu")],
+            ]),
+            parse_mode="HTML",
+        )
+        return
+
+    text, author = quote
+    author_line  = f"\n\n— <i>{author}</i>" if author else ""
+
+    await safeEdit(
+        query,
+        f"<b>Quote</b>\n\n<i>{text}</i>{author_line}",
+        markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Another ↺", callback_data="get_quote")],
+            [InlineKeyboardButton("Back",       callback_data="user_menu")],
+        ]),
         parse_mode="HTML",
     )

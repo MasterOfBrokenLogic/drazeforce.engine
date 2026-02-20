@@ -53,6 +53,8 @@ from handlers.commands import (
     cmdHelp, cmdStats, cmdCancel, cmdSearch, cmdQuota,
     cmdPurge, cmdExport, cmdStatus, cmdPin, cmdBroadcast,
     cmdBan, cmdUnban, cmdMyId,
+    cmdNote, cmdWelcome, cmdLinkinfo, cmdBlock,
+    quickBanCallback, quickUnbanCallback,
 )
 from handlers.messages import messageHandler
 from handlers.polls import (
@@ -114,10 +116,18 @@ def main():
     app.add_handler(CommandHandler("export",    cmdExport))
     app.add_handler(CommandHandler("status",    cmdStatus))
     app.add_handler(CommandHandler("pin",       cmdPin))
+    app.add_handler(CommandHandler("note",      cmdNote))
+    app.add_handler(CommandHandler("welcome",   cmdWelcome))
+    app.add_handler(CommandHandler("linkinfo",  cmdLinkinfo))
+    app.add_handler(CommandHandler("block",     cmdBlock))
     app.add_handler(CommandHandler("broadcast", cmdBroadcast))
     app.add_handler(CommandHandler("ban",       cmdBan))
     app.add_handler(CommandHandler("unban",     cmdUnban))
     app.add_handler(CommandHandler("myid",      cmdMyId))
+
+    # /block inline ban/unban buttons
+    app.add_handler(CallbackQueryHandler(quickBanCallback,   pattern="^quickban_\\d+$"))
+    app.add_handler(CallbackQueryHandler(quickUnbanCallback, pattern="^quickunban_\\d+$"))
 
     # Navigation
     app.add_handler(CallbackQueryHandler(backMainCallback, pattern="^back_main$"))

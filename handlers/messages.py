@@ -637,15 +637,23 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.user_data.get("awaiting_password"):
         if not text:
-            await update.message.reply_text("Please enter a valid password.")
+            await update.message.reply_text("Please enter the password as text.")
             return
         folderId = context.user_data.get("set_password_folder_id")
+        if not folderId:
+            context.user_data.clear()
+            await update.message.reply_text("Session expired. Please try again.", reply_markup=kbHome())
+            return
         try:
             cursor.execute("UPDATE folders SET password=? WHERE id=?", (text, folderId))
             conn.commit()
+            folderName = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
+            folderName = folderName[0] if folderName else str(folderId)
             context.user_data.clear()
             await update.message.reply_text(
-                f"<b>Password Set</b>\n\n<code>{text}</code>",
+                f"<b>Password Set</b>\n\n"
+                f"<code>Folder    :  {folderName}</code>\n"
+                f"<code>Password  :  {text}</code>",
                 parse_mode="HTML",
                 reply_markup=kbBack(f"foldermenu_{folderId}"),
             )
