@@ -415,8 +415,11 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Welcome message ───────────────────────────────────────────────────
     if context.user_data.get("awaiting_welcome_msg"):
+        if not text:
+            await update.message.reply_text("Please send text for the welcome message.")
+            return
         context.user_data.clear()
-        if text and text.upper() == "RESET":
+        if text.upper() == "RESET":
             cursor.execute("DELETE FROM bot_settings WHERE key='welcome_message'")
             conn.commit()
             await update.message.reply_text(
@@ -424,7 +427,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=kbBack("settings_welcome"),
             )
-        elif text:
+        else:
             cursor.execute(
                 "INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('welcome_message', ?)", (text,)
             )
@@ -436,20 +439,43 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ── Add quote ─────────────────────────────────────────────────────────
+    # ── Add quote — step 1: quote text ───────────────────────────────────
     if context.user_data.get("awaiting_quote"):
+        if not text:
+            await update.message.reply_text("Please send the quote as text.")
+            return
+        context.user_data["quote_text"]     = text
+        context.user_data["awaiting_quote"] = False
+        context.user_data["awaiting_quote_author"] = True
+        await update.message.reply_text(
+            f"<b>Quote saved:</b>\n<i>{text}</i>\n\n"
+            "Who said this? Type their name, or type <code>none</code> to leave it anonymous.",
+            parse_mode="HTML",
+        )
+        return
+
+    # ── Add quote — step 2: author ────────────────────────────────────────
+    if context.user_data.get("awaiting_quote_author"):
+        quote_text = context.user_data.get("quote_text", "")
+        author     = None if (not text or text.lower() == "none") else text.strip()
         context.user_data.clear()
-        if text:
+        try:
             cursor.execute(
-                "INSERT INTO quotes (text, added_by, added_at) VALUES (?, ?, ?)",
-                (text, userId, datetime.now().isoformat())
+                "INSERT INTO quotes (text, author, added_by, added_at) VALUES (?, ?, ?, ?)",
+                (quote_text, author, userId, datetime.now().isoformat())
             )
             conn.commit()
+            author_line = f"\n<code>By  :  {author}</code>" if author else ""
             await update.message.reply_text(
-                "<b>Quote Added</b>\n\nIt will appear in the daily rotation.",
+                f"<b>Quote Added</b>\n\n"
+                f"<i>{quote_text}</i>{author_line}\n\n"
+                "It will appear in the daily rotation.",
                 parse_mode="HTML",
                 reply_markup=kbBack("settings_quotes"),
             )
+        except sqlite3.Error as e:
+            logging.error(f"addQuote: {e}")
+            await update.message.reply_text("Failed to save quote.", reply_markup=kbBack("settings_quotes"))
         return
 
     # ── Secret folder codeword ────────────────────────────────────────────

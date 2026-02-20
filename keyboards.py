@@ -43,10 +43,11 @@ def kbMain() -> InlineKeyboardMarkup:
 
 def kbUser() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Trending Now",  callback_data="view_trending")],
-        [InlineKeyboardButton("My Inbox",      callback_data="user_inbox"),
-         InlineKeyboardButton("Contact Admin", callback_data="contact_admin")],
-        [InlineKeyboardButton("Help",          callback_data="help_support")],
+        [InlineKeyboardButton("Trending Now",      callback_data="view_trending")],
+        [InlineKeyboardButton("Quote of the Day",  callback_data="get_quote")],
+        [InlineKeyboardButton("My Inbox",          callback_data="user_inbox"),
+         InlineKeyboardButton("Contact Admin",     callback_data="contact_admin")],
+        [InlineKeyboardButton("Help",              callback_data="help_support")],
     ])
 
 

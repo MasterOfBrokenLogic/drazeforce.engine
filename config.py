@@ -36,6 +36,12 @@ logging.basicConfig(
 # ─────────────────────────────────────────────
 
 conn   = sqlite3.connect("bot.db", check_same_thread=False)
+
+# WAL mode = much safer writes, survives crashes without data loss
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("PRAGMA synchronous=NORMAL")
+conn.commit()
+
 cursor = conn.cursor()
 
 cursor.executescript("""
@@ -294,6 +300,17 @@ _v3_migrations = [
     ("folders", "secret_code", "TEXT",    "NULL"),
 ]
 for _tbl, _col, _type, _default in _v3_migrations:
+    try:
+        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+# ── v3.1 column migrations ──
+_v31_migrations = [
+    ("quotes", "author", "TEXT", "NULL"),
+]
+for _tbl, _col, _type, _default in _v31_migrations:
     try:
         cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
         conn.commit()

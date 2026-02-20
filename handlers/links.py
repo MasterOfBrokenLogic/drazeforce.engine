@@ -212,7 +212,7 @@ async def purgeLinksCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     try:
         expired = cursor.execute(
-            "SELECT COUNT(*) FROM links WHERE datetime(expiry) <= datetime('now')"
+            "SELECT COUNT(*) FROM links WHERE datetime(expiry) <= datetime('now') AND revoked=0"
         ).fetchone()[0]
         revoked = cursor.execute(
             "SELECT COUNT(*) FROM links WHERE revoked=1"
@@ -238,7 +238,8 @@ async def purgeLinksCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<code>Expired  :  {expired}</code>\n"
         f"<code>Revoked  :  {revoked}</code>\n"
         f"<code>Total    :  {total}</code>\n\n"
-        "Purging will permanently remove these records from the database.",
+        "<b>Note:</b> Only link records are deleted.\n"
+        "Folders and files are NOT affected.",
         markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("Purge Now", callback_data="purge_confirm"),
@@ -253,7 +254,10 @@ async def purgeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     try:
-        cursor.execute("DELETE FROM links WHERE datetime(expiry) <= datetime('now')")
+        # Explicitly only delete from links — never touches folders or files
+        cursor.execute(
+            "DELETE FROM links WHERE datetime(expiry) <= datetime('now') AND revoked=0"
+        )
         expired_count = cursor.rowcount
         cursor.execute("DELETE FROM links WHERE revoked=1")
         revoked_count = cursor.rowcount
@@ -262,7 +266,8 @@ async def purgeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TYP
             query,
             f"<b>Purge Complete</b>\n\n"
             f"<code>Expired removed  :  {expired_count}</code>\n"
-            f"<code>Revoked removed  :  {revoked_count}</code>",
+            f"<code>Revoked removed  :  {revoked_count}</code>\n\n"
+            "Folders and files remain untouched.",
             markup=kbHome(),
             parse_mode="HTML",
         )

@@ -71,6 +71,7 @@ from handlers.settings import (
     settingsSecretsCallback, secretMakeCallback, secretPickCallback,
     secretUnmarkCallback, secretUnmarkConfirmCallback,
     settingsLinkstatsCallback, linkstatsViewCallback,
+    getQuoteCallback,
 )
 from handlers.jobs import jobQotd, jobClosePols, jobPurgeTrending, jobPurgeLinks
 
@@ -232,6 +233,7 @@ def main():
     app.add_handler(CallbackQueryHandler(quoteDeleteCallback,         pattern="^quote_delete$"))
     app.add_handler(CallbackQueryHandler(quoteDelConfirmCallback,     pattern="^quote_del_\\d+$"))
     app.add_handler(CallbackQueryHandler(qotdSendNowCallback,         pattern="^qotd_send_now$"))
+    app.add_handler(CallbackQueryHandler(getQuoteCallback,            pattern="^get_quote$"))
     app.add_handler(CallbackQueryHandler(settingsSecretsCallback,     pattern="^settings_secrets$"))
     app.add_handler(CallbackQueryHandler(secretMakeCallback,          pattern="^secret_make$"))
     app.add_handler(CallbackQueryHandler(secretPickCallback,          pattern="^secret_pick_\\d+$"))
