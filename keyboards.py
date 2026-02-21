@@ -32,6 +32,10 @@ def kbMain() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Trending",      callback_data="trending_menu"),
         ],
         [
+            InlineKeyboardButton("🔗 Shorten Links", callback_data="shortener_menu"),
+            InlineKeyboardButton("🎨 Customize",     callback_data="customize_menu"),
+        ],
+        [
             InlineKeyboardButton("Bot Settings",  callback_data="settings_menu"),
             InlineKeyboardButton("Bot Status",    callback_data="bot_status"),
         ],

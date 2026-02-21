@@ -14,7 +14,7 @@ from telegram.ext import (  # type: ignore
 
 from config import TOKEN
 
-from handlers.start import start, backMainCallback, userMenuCallback
+from handlers.start import start, backMainCallback, userMenuCallback, cancelDeliveryCallback
 from handlers.admin import (
     adminMenuCallback, addAdminCallback, listAdminsCallback, adminInfoCallback,
     removeAdminCallback, removeAdminConfirmCallback,
@@ -75,6 +75,16 @@ from handlers.settings import (
     settingsLinkstatsCallback, linkstatsViewCallback,
     getQuoteCallback,
 )
+from handlers.shortener import (
+    shortenerMenuCallback, shortenerSingleCallback,
+    shortenerBulkCallback, shortenerMyLinksCallback,
+)
+from handlers.customize import (
+    customizeMenuCallback,
+    custMessagesCallback, custLinksCallback, custFoldersCallback,
+    custUxCallback, custBroadcastCallback, custIdentityCallback,
+    custNotifsCallback, custSetCallback, custToggleCallback,
+)
 from handlers.jobs import jobQotd, jobClosePols, jobPurgeTrending, jobPurgeLinks
 
 
@@ -130,8 +140,9 @@ def main():
     app.add_handler(CallbackQueryHandler(quickUnbanCallback, pattern="^quickunban_\\d+$"))
 
     # Navigation
-    app.add_handler(CallbackQueryHandler(backMainCallback, pattern="^back_main$"))
-    app.add_handler(CallbackQueryHandler(userMenuCallback, pattern="^user_menu$"))
+    app.add_handler(CallbackQueryHandler(backMainCallback,       pattern="^back_main$"))
+    app.add_handler(CallbackQueryHandler(userMenuCallback,       pattern="^user_menu$"))
+    app.add_handler(CallbackQueryHandler(cancelDeliveryCallback, pattern="^cancel_delivery_\\d+$"))
 
     # User
     app.add_handler(CallbackQueryHandler(helpSupportCallback,          pattern="^help_support$"))
@@ -234,6 +245,24 @@ def main():
     app.add_handler(CallbackQueryHandler(trendingAutoCallback,         pattern="^trending_auto$"))
     app.add_handler(CallbackQueryHandler(trendingClearCallback,        pattern="^trending_clear$"))
     app.add_handler(CallbackQueryHandler(trendingClearConfirmCallback, pattern="^trending_clear_confirm$"))
+
+    # Shortener
+    app.add_handler(CallbackQueryHandler(shortenerMenuCallback,    pattern="^shortener_menu$"))
+    app.add_handler(CallbackQueryHandler(shortenerSingleCallback,  pattern="^shorten_single$"))
+    app.add_handler(CallbackQueryHandler(shortenerBulkCallback,    pattern="^shorten_bulk$"))
+    app.add_handler(CallbackQueryHandler(shortenerMyLinksCallback, pattern="^shorten_mylinks$"))
+
+    # Customize
+    app.add_handler(CallbackQueryHandler(customizeMenuCallback,   pattern="^customize_menu$"))
+    app.add_handler(CallbackQueryHandler(custMessagesCallback,    pattern="^cust_messages$"))
+    app.add_handler(CallbackQueryHandler(custLinksCallback,       pattern="^cust_links$"))
+    app.add_handler(CallbackQueryHandler(custFoldersCallback,     pattern="^cust_folders$"))
+    app.add_handler(CallbackQueryHandler(custUxCallback,          pattern="^cust_ux$"))
+    app.add_handler(CallbackQueryHandler(custBroadcastCallback,   pattern="^cust_broadcast$"))
+    app.add_handler(CallbackQueryHandler(custIdentityCallback,    pattern="^cust_identity$"))
+    app.add_handler(CallbackQueryHandler(custNotifsCallback,      pattern="^cust_notifs$"))
+    app.add_handler(CallbackQueryHandler(custSetCallback,         pattern="^cust_set_.+$"))
+    app.add_handler(CallbackQueryHandler(custToggleCallback,      pattern="^cust_toggle_.+$"))
 
     # Settings
     app.add_handler(CallbackQueryHandler(settingsMenuCallback,        pattern="^settings_menu$"))

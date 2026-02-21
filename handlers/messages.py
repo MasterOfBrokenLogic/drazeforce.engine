@@ -406,6 +406,42 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isAdmin(userId):
         return
 
+    # ── Customize setting input ───────────────────────────────────────────
+    if context.user_data.get("cust_awaiting"):
+        if not text:
+            await update.message.reply_text("Please send a text value.")
+            return
+        from handlers.customize import saveCustSetting
+        await saveCustSetting(update, context, text)
+        return
+
+    # ── Shorten — single URL ──────────────────────────────────────────────
+    if context.user_data.get("awaiting_shorten_single"):
+        if not text:
+            await update.message.reply_text("Please send the URL as text.")
+            return
+        from handlers.shortener import processSingleShorten
+        await processSingleShorten(update, context, text)
+        return
+
+    # ── Shorten — bulk URL collection ─────────────────────────────────────
+    if context.user_data.get("awaiting_shorten_bulk"):
+        if not text:
+            return
+        if text.upper() == "DONE":
+            from handlers.shortener import processBulkShorten
+            await processBulkShorten(update, context)
+            return
+        # Collect lines — user may paste multiple at once
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        context.user_data.setdefault("bulk_urls", []).extend(lines)
+        total = len(context.user_data["bulk_urls"])
+        await update.message.reply_text(
+            f"Added {len(lines)} URL(s)  |  Total queued: {total}\n\nType <code>DONE</code> when finished.",
+            parse_mode="HTML",
+        )
+        return
+
     # ── Welcome message ───────────────────────────────────────────────────
     if context.user_data.get("awaiting_welcome_msg"):
         if not text:
@@ -580,7 +616,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             # Build vote buttons
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup # type: ignore 
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             opts    = [(k, poll_data.get(k)) for k in ("option_a","option_b","option_c","option_d")]
             buttons = []
             row     = []
@@ -1103,16 +1139,21 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("upload_mode"):
         folderName = context.user_data["upload_mode"]
         if text and text.upper() == "END":
-            count    = context.user_data.get("file_count", 0)
-            folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
+            count = context.user_data.get("file_count", 0)
+            try:
+                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
+            except Exception:
+                folderId = None
             context.user_data.clear()
             await update.message.reply_text(
-                f"<b>Upload Complete</b>\n\n"
-                f"<code>{folderName}</code>  |  {count} file(s) added",
+                f"✅ <b>Upload Complete</b>\n\n"
+                f"<code>Folder  :  {folderName}</code>\n"
+                f"<code>Files   :  {count}</code>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")],
-                    [InlineKeyboardButton("Main Menu",    callback_data="back_main")],
+                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")] if folderId else [],
+                    [InlineKeyboardButton("View Folders",  callback_data="view_folders")],
+                    [InlineKeyboardButton("Main Menu",     callback_data="back_main")],
                 ]),
             )
             return
@@ -1135,9 +1176,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
                 )
                 conn.commit()
-                context.user_data["file_count"] += 1
+                context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
                 await update.message.reply_text(
-                    f"<b>{ftype.upper()} saved</b>  |  Total: {context.user_data['file_count']}"
+                    f"{ftype.upper()} saved  |  Total: {context.user_data['file_count']}"
                 )
             except sqlite3.Error as e:
                 logging.error(f"upload: {e}")
@@ -1152,9 +1193,14 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             count = context.user_data.get("file_count", 0)
             context.user_data.clear()
             await update.message.reply_text(
-                f"<b>Done</b>\n\n{count} file(s) added to <code>{folderName}</code>.",
+                f"✅ <b>Done</b>\n\n"
+                f"<code>Folder  :  {folderName}</code>\n"
+                f"<code>Added   :  {count} file(s)</code>",
                 parse_mode="HTML",
-                reply_markup=kbBack(f"foldermenu_{folderId}"),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")],
+                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")],
+                ]),
             )
             return
 
@@ -1177,7 +1223,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
                 await update.message.reply_text(
-                    f"<b>{ftype.upper()} added</b>  |  Total: {context.user_data['file_count']}"
+                    f"{ftype.upper()} added  |  Total: {context.user_data['file_count']}"
                 )
             except sqlite3.Error as e:
                 logging.error(f"addMedia: {e}")

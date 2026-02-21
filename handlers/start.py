@@ -67,6 +67,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _handleToken(update, context, token, user):
     userId = user.id
 
+    # Short link redirect
+    if token.startswith("s_"):
+        from handlers.shortener import handleShortLink
+        await handleShortLink(update, context, token[2:])
+        return
+
     if isBanned(userId) and not isAdmin(userId):
         await update.message.reply_text(
             "<b>Access Denied</b>\n\n"
@@ -171,8 +177,7 @@ async def _deliverFolder(update, context, folderId, token, user):
 
     if not files:
         await update.message.reply_text(
-            "<b>Empty Folder</b>\n\n"
-            "This folder currently has no content.",
+            "<b>Empty Folder</b>\n\nThis folder currently has no content.",
             parse_mode="HTML",
         )
         return
@@ -181,7 +186,6 @@ async def _deliverFolder(update, context, folderId, token, user):
     protect = forwardable == 0
 
     # ── Single-use: revoke IMMEDIATELY before sending anything ──
-    # This prevents any race condition where the user clicks twice fast
     if linkRow:
         linkId, singleUse = linkRow
         if singleUse:
@@ -192,60 +196,74 @@ async def _deliverFolder(update, context, folderId, token, user):
                     (user.id, now_str, token)
                 )
                 conn.commit()
-                # If rowcount is 0 it means another request already revoked it — block this one
                 if cursor.rowcount == 0:
                     await update.message.reply_text(
-                        "<b>Link Unavailable</b>\n\n"
-                        "This single-use link has already been redeemed.",
+                        "<b>Link Unavailable</b>\n\nThis single-use link has already been redeemed.",
                         parse_mode="HTML",
                     )
                     return
             except sqlite3.Error as e:
                 logging.error(f"single-use revoke: {e}")
 
-    await update.message.reply_text(
+    # ── Send cancel button FIRST — user can stop delivery ──
+    cancelKey  = f"cancel_delivery_{user.id}"
+    context.bot_data[cancelKey] = False
+
+    cancelMsg = await update.message.reply_text(
         f"<b>Access Granted</b>\n\n"
         f"<code>Folder  :  {folderName}</code>\n"
         f"<code>Files   :  {len(files)}</code>\n\n"
         "Sending content now...",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Delivery", callback_data=f"cancel_delivery_{user.id}")]
+        ]),
     )
 
-    sentMessages = []
+    sentMessages = [cancelMsg]
 
     if autoDelete:
         msg = await update.message.reply_text(
-            f"<b>Note</b>\n\n"
-            f"This content will be automatically deleted in "
-            f"<code>{autoDelete}</code> minute(s).\n"
-            "Save anything you need before then.",
+            f"<b>Note</b>\n\nThis content will be automatically deleted in "
+            f"<code>{autoDelete}</code> minute(s). Save anything you need before then.",
             parse_mode="HTML",
         )
         sentMessages.append(msg)
 
     for fileId, fileType, textContent in files:
+        # Check if user pressed cancel before each file
+        if context.bot_data.get(cancelKey):
+            try:
+                await update.message.reply_text(
+                    "<b>Delivery Cancelled</b>\n\nContent delivery was stopped.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            context.bot_data.pop(cancelKey, None)
+            return
+
         try:
             if fileType == "text":
                 msg = await update.message.reply_text(textContent)
             elif fileType == "video":
-                msg = await update.message.reply_video(
-                    fileId, protect_content=protect, has_spoiler=True
-                )
+                msg = await update.message.reply_video(fileId, protect_content=protect, has_spoiler=True)
             elif fileType == "photo":
-                msg = await update.message.reply_photo(
-                    fileId, protect_content=protect, has_spoiler=True
-                )
+                msg = await update.message.reply_photo(fileId, protect_content=protect, has_spoiler=True)
             elif fileType == "document":
-                msg = await update.message.reply_document(
-                    fileId, protect_content=protect
-                )
+                msg = await update.message.reply_document(fileId, protect_content=protect)
             else:
-                msg = await update.message.reply_document(
-                    fileId, protect_content=protect
-                )
+                msg = await update.message.reply_document(fileId, protect_content=protect)
             sentMessages.append(msg)
         except Exception as e:
             logging.error(f"_deliverFolder send: {e}")
+
+    # Remove cancel button after delivery completes
+    context.bot_data.pop(cancelKey, None)
+    try:
+        await cancelMsg.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if autoDelete:
         asyncio.create_task(deleteAll(sentMessages, autoDelete * 60))
@@ -266,7 +284,6 @@ async def _deliverFolder(update, context, folderId, token, user):
                 "VALUES (?, ?, ?, ?, ?)",
                 (linkId, folderId, user.id, user.username, now)
             )
-            # Notify SA about single-use redemption
             if singleUse:
                 try:
                     await context.bot.send_message(
@@ -284,6 +301,25 @@ async def _deliverFolder(update, context, folderId, token, user):
         conn.commit()
     except sqlite3.Error as e:
         logging.error(f"_deliverFolder log: {e}")
+
+
+async def cancelDeliveryCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer("Cancelling delivery...", show_alert=False)
+    userId = int(query.data.replace("cancel_delivery_", ""))
+
+    # Only the recipient can cancel their own delivery
+    if query.from_user.id != userId:
+        await query.answer("This is not your delivery.", show_alert=True)
+        return
+
+    cancelKey = f"cancel_delivery_{userId}"
+    context.bot_data[cancelKey] = True
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────

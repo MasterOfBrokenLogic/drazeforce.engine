@@ -330,3 +330,18 @@ for _tbl, _col, _type, _default in _v31_migrations:
         conn.commit()
     except sqlite3.OperationalError:
         pass
+
+# ── v4.0 schema additions ──
+_v4_script = """
+CREATE TABLE IF NOT EXISTS shortened_links (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    short_code   TEXT UNIQUE,
+    original_url TEXT,
+    created_by   INTEGER,
+    created_at   TEXT,
+    clicks       INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_short_code ON shortened_links(short_code);
+"""
+cursor.executescript(_v4_script)
+conn.commit()
