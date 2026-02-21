@@ -37,24 +37,38 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text and not isAdmin(userId):
         try:
             secret = cursor.execute(
-                "SELECT id FROM folders WHERE is_secret=1 AND LOWER(secret_code)=LOWER(?)",
-                (text.strip(),)
+                "SELECT id FROM folders WHERE is_secret=1 AND secret_code=?", (text.strip(),)
             ).fetchone()
         except sqlite3.Error:
             secret = None
         if secret:
             folderId = secret[0]
-            # Check for folder password
-            folderRow      = cursor.execute("SELECT password FROM folders WHERE id=?", (folderId,)).fetchone()
+            # Check for folder password first
+            folderRow = cursor.execute(
+                "SELECT password FROM folders WHERE id=?", (folderId,)
+            ).fetchone()
             folderPassword = folderRow[0] if folderRow else None
 
-            # Secret folders deliver directly — no link required
+            # Find an active link
+            link = cursor.execute("""
+                SELECT token FROM links
+                WHERE folder_id=? AND revoked=0 AND datetime(expiry) > datetime('now')
+                ORDER BY created_at DESC LIMIT 1
+            """, (folderId,)).fetchone()
+
+            if not link:
+                await update.message.reply_text(
+                    "<b>Secret Access</b>\n\nFolder found but no active link is available.\nContact the administrator.",
+                    parse_mode="HTML",
+                )
+                return
+
             if folderPassword:
                 context.user_data.update({
                     "awaiting_password_verify": True,
                     "verify_folder_id":         folderId,
                     "correct_password":         folderPassword,
-                    "access_token":             None,   # secret access — no token
+                    "access_token":             link[0],
                     "password_attempts":        0,
                 })
                 await update.message.reply_text(
@@ -64,7 +78,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML",
                 )
             else:
-                await _deliverFolder(update, context, folderId, None, user)
+                await _deliverFolder(update, context, folderId, link[0], user)
             return
 
     # ── Broadcast password verification ──────────────────────────────────
@@ -284,7 +298,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         toUserId = context.user_data.get("reply_to_user_id")
         msgId    = context.user_data.get("reply_to_msg_id")
 
-        # Collect reply files — text check must not block media
+        # Collect reply files
         fid, ftype, ftxt = None, None, None
         if update.message.video:
             fid, ftype = update.message.video.file_id, "video"
@@ -292,18 +306,15 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fid, ftype = update.message.photo[-1].file_id, "photo"
         elif update.message.document:
             fid, ftype = update.message.document.file_id, "document"
-        elif text and text.upper() not in ("SEND", "CANCEL"):
+        elif text and text.upper() != "SEND":
             ftype, ftxt = "text", text
 
-        if ftype:
+        if ftype and text and text.upper() != "SEND":
             context.user_data.setdefault("reply_files", []).append(
                 {"file_id": fid, "file_type": ftype, "text_content": ftxt}
             )
             cnt = len(context.user_data["reply_files"])
-            await update.message.reply_text(
-                f"<b>Added</b>  |  {cnt} item(s) queued\n\nType <code>SEND</code> when done.",
-                parse_mode="HTML"
-            )
+            await update.message.reply_text(f"<b>Added</b>  |  {cnt} item(s) queued\n\nType <code>SEND</code> when done.", parse_mode="HTML")
             return
 
         if text and text.upper() == "SEND":
@@ -312,22 +323,17 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("<b>Nothing to send.</b> Add some content first, then type SEND.", parse_mode="HTML")
                 return
 
-            # Save reply + files to DB
+            # Save reply to DB
             replyId   = str(uuid.uuid4())[:12]
             adminId   = userId
             adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (adminId,)).fetchone()
             adminName = (adminRow[0] if adminRow else None) or f"Admin {adminId}"
-            textOnly  = " | ".join(f["text_content"] for f in replyFiles if f.get("text_content")) or None
+            combined  = " | ".join(f["text_content"] for f in replyFiles if f.get("text_content")) or None
             try:
                 cursor.execute("""
                     INSERT INTO message_replies (reply_id, message_id, from_admin_id, to_user_id, content, sent_at)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (replyId, msgId, adminId, toUserId, textOnly, datetime.now().isoformat()))
-                for rf in replyFiles:
-                    cursor.execute("""
-                        INSERT INTO message_reply_files (reply_id, file_id, file_type, text_content)
-                        VALUES (?, ?, ?, ?)
-                    """, (replyId, rf.get("file_id"), rf["file_type"], rf.get("text_content")))
+                """, (replyId, msgId, adminId, toUserId, combined, datetime.now().isoformat()))
                 conn.commit()
             except sqlite3.Error as e:
                 logging.error(f"save reply: {e}")
@@ -335,11 +341,11 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.clear()
                 return
 
-            # Notify user and deliver content directly
+            # Send reply content to user
             try:
                 await context.bot.send_message(
                     chat_id=toUserId,
-                    text=f"📩 <b>You Got a Reply</b>\n\n"
+                    text=f"<b>You Got a Reply</b>\n\n"
                          f"<code>{adminName}</code> replied to your message.",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
@@ -347,6 +353,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         [InlineKeyboardButton("My Inbox",   callback_data="user_inbox")],
                     ]),
                 )
+                # Also send the actual content
                 for rf in replyFiles:
                     try:
                         if rf["file_type"] == "text":
@@ -358,9 +365,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         elif rf["file_type"] == "document":
                             await context.bot.send_document(chat_id=toUserId, document=rf["file_id"])
                     except Exception as e:
-                        logging.error(f"reply deliver: {e}")
+                        logging.error(f"reply send file: {e}")
             except Exception as e:
-                logging.error(f"reply notify: {e}")
+                logging.error(f"reply notify user: {e}")
 
             context.user_data.clear()
             await update.message.reply_text(
@@ -406,49 +413,10 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isAdmin(userId):
         return
 
-    # ── Customize setting input ───────────────────────────────────────────
-    if context.user_data.get("cust_awaiting"):
-        if not text:
-            await update.message.reply_text("Please send a text value.")
-            return
-        from handlers.customize import saveCustSetting
-        await saveCustSetting(update, context, text)
-        return
-
-    # ── Shorten — single URL ──────────────────────────────────────────────
-    if context.user_data.get("awaiting_shorten_single"):
-        if not text:
-            await update.message.reply_text("Please send the URL as text.")
-            return
-        from handlers.shortener import processSingleShorten
-        await processSingleShorten(update, context, text)
-        return
-
-    # ── Shorten — bulk URL collection ─────────────────────────────────────
-    if context.user_data.get("awaiting_shorten_bulk"):
-        if not text:
-            return
-        if text.upper() == "DONE":
-            from handlers.shortener import processBulkShorten
-            await processBulkShorten(update, context)
-            return
-        # Collect lines — user may paste multiple at once
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        context.user_data.setdefault("bulk_urls", []).extend(lines)
-        total = len(context.user_data["bulk_urls"])
-        await update.message.reply_text(
-            f"Added {len(lines)} URL(s)  |  Total queued: {total}\n\nType <code>DONE</code> when finished.",
-            parse_mode="HTML",
-        )
-        return
-
     # ── Welcome message ───────────────────────────────────────────────────
     if context.user_data.get("awaiting_welcome_msg"):
-        if not text:
-            await update.message.reply_text("Please send text for the welcome message.")
-            return
         context.user_data.clear()
-        if text.upper() == "RESET":
+        if text and text.upper() == "RESET":
             cursor.execute("DELETE FROM bot_settings WHERE key='welcome_message'")
             conn.commit()
             await update.message.reply_text(
@@ -456,7 +424,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=kbBack("settings_welcome"),
             )
-        else:
+        elif text:
             cursor.execute(
                 "INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('welcome_message', ?)", (text,)
             )
@@ -468,43 +436,20 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ── Add quote — step 1: quote text ───────────────────────────────────
+    # ── Add quote ─────────────────────────────────────────────────────────
     if context.user_data.get("awaiting_quote"):
-        if not text:
-            await update.message.reply_text("Please send the quote as text.")
-            return
-        context.user_data["quote_text"]     = text
-        context.user_data["awaiting_quote"] = False
-        context.user_data["awaiting_quote_author"] = True
-        await update.message.reply_text(
-            f"<b>Quote saved:</b>\n<i>{text}</i>\n\n"
-            "Who said this? Type their name, or type <code>none</code> to leave it anonymous.",
-            parse_mode="HTML",
-        )
-        return
-
-    # ── Add quote — step 2: author ────────────────────────────────────────
-    if context.user_data.get("awaiting_quote_author"):
-        quote_text = context.user_data.get("quote_text", "")
-        author     = None if (not text or text.lower() == "none") else text.strip()
         context.user_data.clear()
-        try:
+        if text:
             cursor.execute(
-                "INSERT INTO quotes (text, author, added_by, added_at) VALUES (?, ?, ?, ?)",
-                (quote_text, author, userId, datetime.now().isoformat())
+                "INSERT INTO quotes (text, added_by, added_at) VALUES (?, ?, ?)",
+                (text, userId, datetime.now().isoformat())
             )
             conn.commit()
-            author_line = f"\n<code>By  :  {author}</code>" if author else ""
             await update.message.reply_text(
-                f"<b>Quote Added</b>\n\n"
-                f"<i>{quote_text}</i>{author_line}\n\n"
-                "It will appear in the daily rotation.",
+                "<b>Quote Added</b>\n\nIt will appear in the daily rotation.",
                 parse_mode="HTML",
                 reply_markup=kbBack("settings_quotes"),
             )
-        except sqlite3.Error as e:
-            logging.error(f"addQuote: {e}")
-            await update.message.reply_text("Failed to save quote.", reply_markup=kbBack("settings_quotes"))
         return
 
     # ── Secret folder codeword ────────────────────────────────────────────
@@ -666,23 +611,15 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.user_data.get("awaiting_password"):
         if not text:
-            await update.message.reply_text("Please enter the password as text.")
+            await update.message.reply_text("Please enter a valid password.")
             return
         folderId = context.user_data.get("set_password_folder_id")
-        if not folderId:
-            context.user_data.clear()
-            await update.message.reply_text("Session expired. Please try again.", reply_markup=kbHome())
-            return
         try:
             cursor.execute("UPDATE folders SET password=? WHERE id=?", (text, folderId))
             conn.commit()
-            folderName = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
-            folderName = folderName[0] if folderName else str(folderId)
             context.user_data.clear()
             await update.message.reply_text(
-                f"<b>Password Set</b>\n\n"
-                f"<code>Folder    :  {folderName}</code>\n"
-                f"<code>Password  :  {text}</code>",
+                f"<b>Password Set</b>\n\n<code>{text}</code>",
                 parse_mode="HTML",
                 reply_markup=kbBack(f"foldermenu_{folderId}"),
             )
@@ -1139,23 +1076,47 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("upload_mode"):
         folderName = context.user_data["upload_mode"]
         if text and text.upper() == "END":
-            count = context.user_data.get("file_count", 0)
+            count    = context.user_data.get("file_count", 0)
+            type_tally = context.user_data.get("upload_type_tally", {})
+            total_size = context.user_data.get("upload_total_size", 0)
+            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
             try:
                 folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
             except Exception:
                 folderId = None
             context.user_data.clear()
-            await update.message.reply_text(
-                f"<b>Upload Complete</b>\n\n"
-                f"<code>Folder  :  {folderName}</code>\n"
-                f"<code>Files   :  {count}</code>",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")] if folderId else [],
-                    [InlineKeyboardButton("View Folders",  callback_data="view_folders")],
-                    [InlineKeyboardButton("Main Menu",     callback_data="back_main")],
-                ]),
+
+            from helpers import fmtSize, fmtDt
+
+            # Build type breakdown lines
+            type_lines = ""
+            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
+            for ftype_key in ("video", "photo", "document", "text"):
+                n = type_tally.get(ftype_key, 0)
+                if n:
+                    type_lines += f"\n<code>  {type_label_map[ftype_key]:<12}  {n}</code>"
+
+            summary = (
+                f"<b>Upload Complete</b>\n"
+                f"<code>{'─' * 28}</code>\n\n"
+                f"<b>Folder</b>\n"
+                f"<code>  Name         {folderName}</code>\n"
+                f"<code>  Total files  {count}</code>\n"
+                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
+                f"<b>Breakdown</b>"
+                f"{type_lines}\n\n"
+                f"<b>Session</b>\n"
+                f"<code>  Started      {fmtDt(started_at)}</code>\n"
+                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
             )
+
+            buttons = []
+            if folderId:
+                buttons.append([InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")])
+                buttons.append([InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")])
+            buttons.append([InlineKeyboardButton("Main Menu", callback_data="back_main")])
+
+            await update.message.reply_text(summary, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
             return
 
         fid, ftype, fsize, txt = None, None, None, None
@@ -1177,8 +1138,17 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
+                tally = context.user_data.setdefault("upload_type_tally", {})
+                tally[ftype] = tally.get(ftype, 0) + 1
+                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
+                if "upload_started_at" not in context.user_data:
+                    context.user_data["upload_started_at"] = datetime.now().isoformat()
+                cnt = context.user_data["file_count"]
+                type_label = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"{ftype.upper()} saved  |  Total: {context.user_data['file_count']}"
+                    f"<b>{type_label}</b>  <i>saved</i>\n"
+                    f"<code>Total  :  {cnt} file(s)</code>",
+                    parse_mode="HTML",
                 )
             except sqlite3.Error as e:
                 logging.error(f"upload: {e}")
@@ -1189,17 +1159,42 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("add_media_mode"):
         folderName = context.user_data["add_media_mode"]
         folderId   = context.user_data["add_media_folder_id"]
-        if text and text.upper() == "DONE":
-            count = context.user_data.get("file_count", 0)
+        if text and text.upper() == "END":
+            count      = context.user_data.get("file_count", 0)
+            type_tally = context.user_data.get("upload_type_tally", {})
+            total_size = context.user_data.get("upload_total_size", 0)
+            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
             context.user_data.clear()
+
+            from helpers import fmtSize, fmtDt
+
+            type_lines = ""
+            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
+            for ftype_key in ("video", "photo", "document", "text"):
+                n = type_tally.get(ftype_key, 0)
+                if n:
+                    type_lines += f"\n<code>  {type_label_map[ftype_key]:<12}  {n}</code>"
+
+            summary = (
+                f"<b>Upload Complete</b>\n"
+                f"<code>{'─' * 28}</code>\n\n"
+                f"<b>Folder</b>\n"
+                f"<code>  Name         {folderName}</code>\n"
+                f"<code>  Total files  {count}</code>\n"
+                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
+                f"<b>Breakdown</b>"
+                f"{type_lines}\n\n"
+                f"<b>Session</b>\n"
+                f"<code>  Started      {fmtDt(started_at)}</code>\n"
+                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
+            )
+
             await update.message.reply_text(
-                f"<b>Done</b>\n\n"
-                f"<code>Folder  :  {folderName}</code>\n"
-                f"<code>Added   :  {count} file(s)</code>",
+                summary,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")],
-                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")],
+                    [InlineKeyboardButton("View Folder", callback_data=f"foldermenu_{folderId}")],
+                    [InlineKeyboardButton("Main Menu",   callback_data="back_main")],
                 ]),
             )
             return
@@ -1222,8 +1217,17 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
+                tally = context.user_data.setdefault("upload_type_tally", {})
+                tally[ftype] = tally.get(ftype, 0) + 1
+                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
+                if "upload_started_at" not in context.user_data:
+                    context.user_data["upload_started_at"] = datetime.now().isoformat()
+                cnt = context.user_data["file_count"]
+                type_label = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"{ftype.upper()} added  |  Total: {context.user_data['file_count']}"
+                    f"<b>{type_label}</b>  <i>saved</i>\n"
+                    f"<code>Total  :  {cnt} file(s)</code>",
+                    parse_mode="HTML",
                 )
             except sqlite3.Error as e:
                 logging.error(f"addMedia: {e}")

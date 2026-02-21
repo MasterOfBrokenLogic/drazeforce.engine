@@ -30,7 +30,7 @@ async def addMediaCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query,
         f"<b>Add Files</b>  |  <code>{folder[0]}</code>\n\n"
         "Send any files, photos, videos, or text messages.\n\n"
-        "Type <code>DONE</code> when you have finished uploading.",
+        "Type <code>END</code> when you have finished uploading.",
         markup=kbBack(f"foldermenu_{folderId}"),
         parse_mode="HTML",
     )
