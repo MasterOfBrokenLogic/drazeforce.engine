@@ -441,7 +441,7 @@ async def saveCustSetting(update, context, text: str):
     else:
         _set(key, text)
         await update.message.reply_text(
-            f"<b>Saved ✅</b>\n\n"
+            f"<b>Saved</b>\n\n"
             f"<code>{_SET_LABELS.get(key, key)}</code>\n"
             f"<code>{text[:80]}</code>",
             parse_mode="HTML",
