@@ -39,8 +39,8 @@ async def shortenerMenuCallback(update: Update, context: ContextTypes.DEFAULT_TY
         "Choose a mode:",
         markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Single 🔗",  callback_data="shorten_single"),
-                InlineKeyboardButton("Bulk 📋",    callback_data="shorten_bulk"),
+                InlineKeyboardButton("Single",  callback_data="shorten_single"),
+                InlineKeyboardButton("Bulk",    callback_data="shorten_bulk"),
             ],
             [InlineKeyboardButton("My Links",      callback_data="shorten_mylinks")],
             [InlineKeyboardButton("Main Menu",     callback_data="back_main")],
@@ -123,7 +123,7 @@ async def shortenerMyLinksCallback(update: Update, context: ContextTypes.DEFAULT
         short   = f"https://t.me/{botName}?start=s_{code}"
         preview = url[:45] + "..." if len(url) > 45 else url
         lines.append(
-            f"\n🔗 <code>{short}</code>\n"
+            f"\n <code>{short}</code>\n"
             f"<code>→  {preview}</code>\n"
             f"<code>Clicks  :  {clicks}</code>"
         )
@@ -256,6 +256,6 @@ async def handleShortLink(update, context, code: str):
         f"<b>Opening Link</b>\n\n<code>{original[:80]}{'...' if len(original)>80 else ''}</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Open 🔗", url=original)]
+            [InlineKeyboardButton("Open", url=original)]
         ]),
     )

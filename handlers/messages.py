@@ -1146,7 +1146,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 folderId = None
             context.user_data.clear()
             await update.message.reply_text(
-                f"✅ <b>Upload Complete</b>\n\n"
+                f"<b>Upload Complete</b>\n\n"
                 f"<code>Folder  :  {folderName}</code>\n"
                 f"<code>Files   :  {count}</code>",
                 parse_mode="HTML",
@@ -1193,7 +1193,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             count = context.user_data.get("file_count", 0)
             context.user_data.clear()
             await update.message.reply_text(
-                f"✅ <b>Done</b>\n\n"
+                f"<b>Done</b>\n\n"
                 f"<code>Folder  :  {folderName}</code>\n"
                 f"<code>Added   :  {count} file(s)</code>",
                 parse_mode="HTML",
