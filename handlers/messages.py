@@ -1076,7 +1076,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("upload_mode"):
         folderName = context.user_data["upload_mode"]
         if text and text.upper() == "END":
-            count    = context.user_data.get("file_count", 0)
+            count      = context.user_data.get("file_count", 0)
             type_tally = context.user_data.get("upload_type_tally", {})
             total_size = context.user_data.get("upload_total_size", 0)
             started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
@@ -1087,14 +1087,12 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             from helpers import fmtSize, fmtDt
-
-            # Build type breakdown lines
-            type_lines = ""
             type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
-            for ftype_key in ("video", "photo", "document", "text"):
-                n = type_tally.get(ftype_key, 0)
+            type_lines = ""
+            for k in ("video", "photo", "document", "text"):
+                n = type_tally.get(k, 0)
                 if n:
-                    type_lines += f"\n<code>  {type_label_map[ftype_key]:<12}  {n}</code>"
+                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
 
             summary = (
                 f"<b>Upload Complete</b>\n"
@@ -1109,13 +1107,11 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<code>  Started      {fmtDt(started_at)}</code>\n"
                 f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
             )
-
             buttons = []
             if folderId:
                 buttons.append([InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")])
                 buttons.append([InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")])
             buttons.append([InlineKeyboardButton("Main Menu", callback_data="back_main")])
-
             await update.message.reply_text(summary, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
             return
 
@@ -1144,9 +1140,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if "upload_started_at" not in context.user_data:
                     context.user_data["upload_started_at"] = datetime.now().isoformat()
                 cnt = context.user_data["file_count"]
-                type_label = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
+                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"<b>{type_label}</b>  <i>saved</i>\n"
+                    f"<b>{lbl}</b>  <i>saved</i>\n"
                     f"<code>Total  :  {cnt} file(s)</code>",
                     parse_mode="HTML",
                 )
@@ -1167,13 +1163,12 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             from helpers import fmtSize, fmtDt
-
-            type_lines = ""
             type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
-            for ftype_key in ("video", "photo", "document", "text"):
-                n = type_tally.get(ftype_key, 0)
+            type_lines = ""
+            for k in ("video", "photo", "document", "text"):
+                n = type_tally.get(k, 0)
                 if n:
-                    type_lines += f"\n<code>  {type_label_map[ftype_key]:<12}  {n}</code>"
+                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
 
             summary = (
                 f"<b>Upload Complete</b>\n"
@@ -1188,7 +1183,6 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<code>  Started      {fmtDt(started_at)}</code>\n"
                 f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
             )
-
             await update.message.reply_text(
                 summary,
                 parse_mode="HTML",
@@ -1223,9 +1217,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if "upload_started_at" not in context.user_data:
                     context.user_data["upload_started_at"] = datetime.now().isoformat()
                 cnt = context.user_data["file_count"]
-                type_label = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
+                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"<b>{type_label}</b>  <i>saved</i>\n"
+                    f"<b>{lbl}</b>  <i>saved</i>\n"
                     f"<code>Total  :  {cnt} file(s)</code>",
                     parse_mode="HTML",
                 )
