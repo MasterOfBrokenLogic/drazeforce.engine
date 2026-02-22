@@ -41,6 +41,9 @@ def generateBroadcastCode() -> str:
 def generateMessageId() -> str:
     return "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(16))
 
+def randomFolderName() -> str:
+    return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+
 
 def validateFolderName(name: str) -> tuple:
     if not name or len(name) > 100:
