@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -25,10 +24,11 @@ async def trendingMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         items = cursor.execute("""
             SELECT t.id, f.name, t.label, t.expires_at
             FROM trending t JOIN folders f ON t.folder_id = f.id
-            WHERE t.expires_at IS NULL OR datetime(t.expires_at) > datetime('now')
+            WHERE t.expires_at IS NULL OR t.expires_at > NOW()
             ORDER BY t.sort_order ASC, t.added_at DESC
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        items = cursor.fetchall()
+    except Exception as e:
         logging.error(f"trendingMenu: {e}")
         await safeEdit(query, "Failed to load trending.", markup=kbHome())
         return
@@ -61,8 +61,9 @@ async def trendingAddCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         folders = cursor.execute(
             "SELECT id, name FROM folders WHERE is_secret=0 ORDER BY pinned DESC, created_at DESC"
-        ).fetchall()
-    except sqlite3.Error as e:
+        )
+        folders = cursor.fetchall()
+    except Exception as e:
         logging.error(f"trendingAdd folders: {e}")
         await safeEdit(query, "Failed to load folders.", markup=kbBack("trending_menu"))
         return
@@ -115,8 +116,9 @@ async def trendingRemoveCallback(update: Update, context: ContextTypes.DEFAULT_T
             SELECT t.id, f.name, t.label
             FROM trending t JOIN folders f ON t.folder_id = f.id
             ORDER BY t.sort_order ASC, t.added_at DESC
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        items = cursor.fetchall()
+    except Exception as e:
         logging.error(f"trendingRemove: {e}")
         await safeEdit(query, "Failed to load items.", markup=kbBack("trending_menu"))
         return
@@ -149,7 +151,7 @@ async def trendingDelCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     tid   = int(query.data.replace("trending_del_", ""))
     try:
-        cursor.execute("DELETE FROM trending WHERE id=?", (tid,))
+        cursor.execute("DELETE FROM trending WHERE id=%s", (tid,))
         conn.commit()
         await safeEdit(
             query,
@@ -157,7 +159,7 @@ async def trendingDelCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             markup=kbBack("trending_menu"),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"trendingDel: {e}")
         await safeEdit(query, "Failed to remove item.", markup=kbBack("trending_menu"))
 
@@ -171,13 +173,14 @@ async def trendingAutoCallback(update: Update, context: ContextTypes.DEFAULT_TYP
             SELECT f.id, f.name, COUNT(l.id) as views
             FROM folders f
             JOIN logs l ON f.id = l.folder_id
-            WHERE datetime(l.accessed_at) > datetime('now', '-2 days')
+            WHERE l.accessed_at > NOW() - INTERVAL '2 days'
             AND f.is_secret = 0
             GROUP BY f.id
             ORDER BY views DESC
             LIMIT 5
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        top = cursor.fetchall()
+    except Exception as e:
         logging.error(f"trendingAuto: {e}")
         await safeEdit(query, "Failed to run auto trending.", markup=kbBack("trending_menu"))
         return
@@ -197,7 +200,7 @@ async def trendingAutoCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     for i, (fid, fname, views) in enumerate(top):
         cursor.execute("""
             INSERT INTO trending (folder_id, label, added_by, added_at, expires_at, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (fid, fname, query.from_user.id, datetime.now().isoformat(), expires, i))
     conn.commit()
 
@@ -241,7 +244,7 @@ async def trendingClearConfirmCallback(update: Update, context: ContextTypes.DEF
             markup=kbBack("trending_menu"),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"trendingClearConfirm: {e}")
         await safeEdit(query, "Failed to clear trending.", markup=kbBack("trending_menu"))
 
@@ -257,11 +260,12 @@ async def viewTrendingCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         items = cursor.execute("""
             SELECT t.id, f.id, f.name, t.label, t.expires_at
             FROM trending t JOIN folders f ON t.folder_id = f.id
-            WHERE (t.expires_at IS NULL OR datetime(t.expires_at) > datetime('now'))
+            WHERE (t.expires_at IS NULL OR t.expires_at > NOW())
             AND f.is_secret = 0
             ORDER BY t.sort_order ASC, t.added_at DESC
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        items = cursor.fetchall()
+    except Exception as e:
         logging.error(f"viewTrending: {e}")
         await safeEdit(query, "Failed to load trending.", markup=kbBack("user_menu"))
         return
@@ -285,9 +289,10 @@ async def viewTrendingCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     for tid, fid, fname, label, expires in items:
         link = cursor.execute("""
             SELECT token FROM links
-            WHERE folder_id=? AND revoked=0 AND datetime(expiry) > datetime('now')
+            WHERE folder_id=%s AND revoked=0 AND expiry > NOW()
             ORDER BY created_at DESC LIMIT 1
-        """, (fid,)).fetchone()
+        """, (fid,))
+        link = cursor.fetchone()
         display = label or fname
         if link:
             buttons.append([InlineKeyboardButton(

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import sqlite3
 from datetime import datetime
 
 from telegram import Update  # type: ignore
@@ -51,7 +50,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check for custom welcome message
         custom = cursor.execute(
             "SELECT value FROM bot_settings WHERE key='welcome_message'"
-        ).fetchone()
+        )
+        custom = cursor.fetchone()
         welcome_text = custom[0] if custom else (
             f"<b>Hello, {user.first_name}</b>\n\n"
             "Use the options below to get started.\n"
@@ -83,9 +83,10 @@ async def _handleToken(update, context, token, user):
 
     try:
         link = cursor.execute(
-            "SELECT folder_id, expiry, revoked, single_use, used_by FROM links WHERE token=?", (token,)
-        ).fetchone()
-    except sqlite3.Error as e:
+            "SELECT folder_id, expiry, revoked, single_use, used_by FROM links WHERE token=%s", (token,)
+        )
+        link = cursor.fetchone()
+    except Exception as e:
         logging.error(f"_handleToken DB: {e}")
         await update.message.reply_text("A database error occurred. Please try again later.")
         return
@@ -132,10 +133,11 @@ async def _handleToken(update, context, token, user):
 
     try:
         row = cursor.execute(
-            "SELECT password FROM folders WHERE id=?", (folderId,)
-        ).fetchone()
+            "SELECT password FROM folders WHERE id=%s", (folderId,)
+        )
+        row = cursor.fetchone()
         folderPassword = row[0] if row else None
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"_handleToken folder: {e}")
         await update.message.reply_text("A database error occurred.")
         return
@@ -162,15 +164,18 @@ async def _handleToken(update, context, token, user):
 async def _deliverFolder(update, context, folderId, token, user):
     try:
         files = cursor.execute(
-            "SELECT file_id, file_type, text_content FROM files WHERE folder_id=?", (folderId,)
-        ).fetchall()
+            "SELECT file_id, file_type, text_content FROM files WHERE folder_id=%s", (folderId,)
+        )
+        files = cursor.fetchall()
         folder = cursor.execute(
-            "SELECT forwardable, auto_delete_minutes, name FROM folders WHERE id=?", (folderId,)
-        ).fetchone()
+            "SELECT forwardable, auto_delete_minutes, name FROM folders WHERE id=%s", (folderId,)
+        )
+        folder = cursor.fetchone()
         linkRow = cursor.execute(
-            "SELECT id, single_use FROM links WHERE token=?", (token,)
-        ).fetchone()
-    except sqlite3.Error as e:
+            "SELECT id, single_use FROM links WHERE token=%s", (token,)
+        )
+        linkRow = cursor.fetchone()
+    except Exception as e:
         logging.error(f"_deliverFolder: {e}")
         await update.message.reply_text("A database error occurred.")
         return
@@ -192,7 +197,7 @@ async def _deliverFolder(update, context, folderId, token, user):
             try:
                 now_str = datetime.now().isoformat()
                 cursor.execute(
-                    "UPDATE links SET revoked=1, used_by=?, used_at=? WHERE token=? AND revoked=0",
+                    "UPDATE links SET revoked=1, used_by=%s, used_at=%s WHERE token=%s AND revoked=0",
                     (user.id, now_str, token)
                 )
                 conn.commit()
@@ -202,7 +207,7 @@ async def _deliverFolder(update, context, folderId, token, user):
                         parse_mode="HTML",
                     )
                     return
-            except sqlite3.Error as e:
+            except Exception as e:
                 logging.error(f"single-use revoke: {e}")
 
     # ── Send cancel button FIRST — user can stop delivery ──
@@ -271,17 +276,17 @@ async def _deliverFolder(update, context, folderId, token, user):
     try:
         now = datetime.now().isoformat()
         cursor.execute(
-            "INSERT INTO logs (user_id, username, folder_id, accessed_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO logs (user_id, username, folder_id, accessed_at) VALUES (%s, %s, %s, %s)",
             (user.id, user.username, folderId, now),
         )
         cursor.execute(
-            "UPDATE links SET access_count = access_count + 1 WHERE token=?", (token,)
+            "UPDATE links SET access_count = access_count + 1 WHERE token=%s", (token,)
         )
         if linkRow:
             linkId, singleUse = linkRow
             cursor.execute(
                 "INSERT INTO link_access_log (link_id, folder_id, user_id, username, accessed_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s, %s)",
                 (linkId, folderId, user.id, user.username, now)
             )
             if singleUse:
@@ -299,7 +304,7 @@ async def _deliverFolder(update, context, folderId, token, user):
                 except Exception as e:
                     logging.error(f"single-use notify: {e}")
         conn.commit()
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"_deliverFolder log: {e}")
 
 
@@ -346,7 +351,8 @@ async def backMainCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         custom = cursor.execute(
             "SELECT value FROM bot_settings WHERE key='welcome_message'"
-        ).fetchone()
+        )
+        custom = cursor.fetchone()
         welcome_text = custom[0] if custom else (
             f"<b>Hello, {user.first_name}</b>\n\n"
             "Use the options below to get started."

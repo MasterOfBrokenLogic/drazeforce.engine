@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -43,8 +42,9 @@ async def viewFoldersCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             LEFT JOIN files fi ON f.id = fi.folder_id
             GROUP BY f.id
             ORDER BY f.pinned DESC, f.created_at DESC
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        folders = cursor.fetchall()
+    except Exception as e:
         logging.error(f"viewFolders: {e}")
         await safeEdit(query, "Failed to load folders.", markup=kbHome())
         return
@@ -89,14 +89,17 @@ async def folderMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         folder    = cursor.execute(
             "SELECT name, password, pinned, note FROM folders WHERE id=?", (folderId,)
-        ).fetchone()
+        )
+        folder = cursor.fetchone()
         fileCount = cursor.execute(
             "SELECT COUNT(*) FROM files WHERE folder_id=?", (folderId,)
-        ).fetchone()[0]
+        )
+        fileCount = cursor.fetchone()
+        fileCount = fileCount[0] if fileCount else None
         totalSize = cursor.execute(
             "SELECT SUM(file_size) FROM files WHERE folder_id=?", (folderId,)
         ).fetchone()[0] or 0
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"folderMenu: {e}")
         await safeEdit(query, "Failed to load folder.", markup=kbHome())
         return
@@ -154,11 +157,12 @@ async def pinFolderCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     folderId = int(query.data.replace("pin_", ""))
     try:
-        row    = cursor.execute("SELECT pinned FROM folders WHERE id=?", (folderId,)).fetchone()
+        cursor.execute("SELECT pinned FROM folders WHERE id=%s", (folderId,))
+        row = cursor.fetchone()
         newVal = 0 if row and row[0] else 1
-        cursor.execute("UPDATE folders SET pinned=? WHERE id=?", (newVal, folderId))
+        cursor.execute("UPDATE folders SET pinned=%s WHERE id=%s", (newVal, folderId))
         conn.commit()
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"pinFolder: {e}")
         await safeEdit(query, "Failed to update pin status.", markup=kbHome())
         return
@@ -214,8 +218,9 @@ async def passwordCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         folder = cursor.execute(
             "SELECT name, password FROM folders WHERE id=?", (folderId,)
-        ).fetchone()
-    except sqlite3.Error as e:
+        )
+        folder = cursor.fetchone()
+    except Exception as e:
         logging.error(f"passwordCb: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         return
@@ -258,7 +263,7 @@ async def removePasswordCallback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     folderId = int(query.data.replace("removepass_", ""))
     try:
-        cursor.execute("UPDATE folders SET password=NULL WHERE id=?", (folderId,))
+        cursor.execute("UPDATE folders SET password=NULL WHERE id=%s", (folderId,))
         conn.commit()
         await safeEdit(
             query,
@@ -266,7 +271,7 @@ async def removePasswordCallback(update: Update, context: ContextTypes.DEFAULT_T
             markup=kbBack(f"foldermenu_{folderId}"),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"removePass: {e}")
         await safeEdit(query, "Failed to remove password.", markup=kbBack(f"foldermenu_{folderId}"))
 
@@ -279,8 +284,11 @@ async def deleteSelectCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     query    = update.callback_query
     await query.answer()
     folderId = int(query.data.replace("delete_select_", ""))
-    folder    = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
-    fileCount = cursor.execute("SELECT COUNT(*) FROM files WHERE folder_id=?", (folderId,)).fetchone()[0]
+    cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
+    folder = cursor.fetchone()
+    cursor.execute("SELECT COUNT(*) FROM files WHERE folder_id=%s", (folderId,))
+    fileCount = cursor.fetchone()
+    fileCount = fileCount[0] if fileCount else None
     if not folder:
         await safeEdit(query, "Folder not found.", markup=kbHome())
         return
@@ -306,10 +314,10 @@ async def deleteConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     folderId = int(query.data.replace("delete_confirm_", ""))
     try:
-        cursor.execute("DELETE FROM files   WHERE folder_id=?", (folderId,))
-        cursor.execute("DELETE FROM links   WHERE folder_id=?", (folderId,))
-        cursor.execute("DELETE FROM logs    WHERE folder_id=?", (folderId,))
-        cursor.execute("DELETE FROM folders WHERE id=?",        (folderId,))
+        cursor.execute("DELETE FROM files   WHERE folder_id=%s", (folderId,))
+        cursor.execute("DELETE FROM links   WHERE folder_id=%s", (folderId,))
+        cursor.execute("DELETE FROM logs    WHERE folder_id=%s", (folderId,))
+        cursor.execute("DELETE FROM folders WHERE id=%s",        (folderId,))
         conn.commit()
         await safeEdit(
             query,
@@ -317,6 +325,6 @@ async def deleteConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TY
             markup=kbHome(),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"deleteConfirm: {e}")
         await safeEdit(query, "Failed to delete folder.", markup=kbHome())

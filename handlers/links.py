@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -20,8 +19,9 @@ async def generateLinkCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         folders = cursor.execute(
             "SELECT id, name FROM folders ORDER BY pinned DESC, created_at DESC"
-        ).fetchall()
-    except sqlite3.Error as e:
+        )
+        folders = cursor.fetchall()
+    except Exception as e:
         logging.error(f"generateLink: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         return
@@ -52,7 +52,8 @@ async def linkCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query    = update.callback_query
     await query.answer()
     folderId = int(query.data.split("_")[1])
-    folder   = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
+    cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
+    folder = cursor.fetchone()
     if not folder:
         await safeEdit(query, "Folder not found.", markup=kbHome())
         return
@@ -127,8 +128,9 @@ async def revokeLinkCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             LEFT JOIN links l ON f.id = l.folder_id AND l.revoked = 0
             GROUP BY f.id
             HAVING COUNT(l.id) > 0
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        folders = cursor.fetchall()
+    except Exception as e:
         logging.error(f"revokeLink: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         return
@@ -161,13 +163,16 @@ async def revokeSelectCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     query    = update.callback_query
     await query.answer()
     folderId = int(query.data.replace("revoke_select_", ""))
-    folder   = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
+    cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
+    folder = cursor.fetchone()
     if not folder:
         await safeEdit(query, "Folder not found.", markup=kbHome())
         return
     linkCount = cursor.execute(
         "SELECT COUNT(*) FROM links WHERE folder_id=? AND revoked=0", (folderId,)
-    ).fetchone()[0]
+    )
+    linkCount = cursor.fetchone()
+    linkCount = linkCount[0] if linkCount else None
     await safeEdit(
         query,
         f"<b>Revoke Links</b>\n\n"
@@ -189,7 +194,7 @@ async def revokeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     folderId = int(query.data.replace("revoke_confirm_", ""))
     try:
-        cursor.execute("UPDATE links SET revoked=1 WHERE folder_id=? AND revoked=0", (folderId,))
+        cursor.execute("UPDATE links SET revoked=1 WHERE folder_id=%s AND revoked=0", (folderId,))
         conn.commit()
         await safeEdit(
             query,
@@ -198,7 +203,7 @@ async def revokeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TY
             markup=kbHome(),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"revokeConfirm: {e}")
         await safeEdit(query, "Failed to revoke links.", markup=kbHome())
 
@@ -212,12 +217,16 @@ async def purgeLinksCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     try:
         expired = cursor.execute(
-            "SELECT COUNT(*) FROM links WHERE datetime(expiry) <= datetime('now') AND revoked=0"
-        ).fetchone()[0]
+            "SELECT COUNT(*) FROM links WHERE expiry <= NOW() AND revoked=0"
+        )
+        expired = cursor.fetchone()
+        expired = expired[0] if expired else None
         revoked = cursor.execute(
             "SELECT COUNT(*) FROM links WHERE revoked=1"
-        ).fetchone()[0]
-    except sqlite3.Error as e:
+        )
+        revoked = cursor.fetchone()
+        revoked = revoked[0] if revoked else None
+    except Exception as e:
         logging.error(f"purgeLinks count: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         return
@@ -256,7 +265,7 @@ async def purgeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         # Explicitly only delete from links — never touches folders or files
         cursor.execute(
-            "DELETE FROM links WHERE datetime(expiry) <= datetime('now') AND revoked=0"
+            "DELETE FROM links WHERE expiry <= NOW() AND revoked=0"
         )
         expired_count = cursor.rowcount
         cursor.execute("DELETE FROM links WHERE revoked=1")
@@ -271,6 +280,6 @@ async def purgeConfirmCallback(update: Update, context: ContextTypes.DEFAULT_TYP
             markup=kbHome(),
             parse_mode="HTML",
         )
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"purgeConfirm: {e}")
         await safeEdit(query, "Failed to purge links.", markup=kbHome())

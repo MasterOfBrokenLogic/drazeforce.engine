@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -15,25 +14,26 @@ from keyboards import kbHome, kbBack
 # ─────────────────────────────────────────────
 
 def _get(key: str, default: str = "Not set") -> str:
-    row = cursor.execute("SELECT value FROM bot_settings WHERE key=?", (key,)).fetchone()
+    cursor.execute("SELECT value FROM bot_settings WHERE key=%s", (key,))
+    row = cursor.fetchone()
     return row[0] if row else default
 
 
 def _set(key: str, value: str):
     cursor.execute(
-        "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)", (key, value)
+        "INSERT INTO bot_settings (key, value) VALUES (%s, %s)", (key, value)
     )
     conn.commit()
 
 
 def _del(key: str):
-    cursor.execute("DELETE FROM bot_settings WHERE key=?", (key,))
+    cursor.execute("DELETE FROM bot_settings WHERE key=%s", (key,))
     conn.commit()
 
 
 def _yn(key: str, default: str = "1") -> str:
     val = _get(key, default)
-    return "ON" if val == "1" else "OFF"
+    return "✅ ON" if val == "1" else "❌ OFF"
 
 
 def _toggle(key: str, default: str = "1") -> str:
@@ -60,13 +60,13 @@ async def customizeMenuCallback(update: Update, context: ContextTypes.DEFAULT_TY
         "Every setting in one place.\n"
         "Pick a category:",
         markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Messages & Text",    callback_data="cust_messages")],
-            [InlineKeyboardButton("Links & Access",     callback_data="cust_links")],
-            [InlineKeyboardButton("Folders",            callback_data="cust_folders")],
-            [InlineKeyboardButton("User Experience",    callback_data="cust_ux")],
-            [InlineKeyboardButton("Broadcasts",         callback_data="cust_broadcast")],
-            [InlineKeyboardButton("Bot Identity",       callback_data="cust_identity")],
-            [InlineKeyboardButton("Notifications",      callback_data="cust_notifs")],
+            [InlineKeyboardButton("💬 Messages & Text",    callback_data="cust_messages")],
+            [InlineKeyboardButton("🔗 Links & Access",     callback_data="cust_links")],
+            [InlineKeyboardButton("📁 Folders",            callback_data="cust_folders")],
+            [InlineKeyboardButton("👤 User Experience",    callback_data="cust_ux")],
+            [InlineKeyboardButton("📢 Broadcasts",         callback_data="cust_broadcast")],
+            [InlineKeyboardButton("🤖 Bot Identity",       callback_data="cust_identity")],
+            [InlineKeyboardButton("🔔 Notifications",      callback_data="cust_notifs")],
             [InlineKeyboardButton("Main Menu",             callback_data="back_main")],
         ]),
         parse_mode="HTML",
@@ -219,8 +219,8 @@ async def custBroadcastCallback(update: Update, context: ContextTypes.DEFAULT_TY
 
     delay      = _get("broadcast_delay_ms", "50")
     fwd        = _yn("broadcast_forwardable_default", "1")
-    pin_header = _get("pin_header_text", "Announcement")
-    bcast_hdr  = _get("broadcast_header_text", "Broadcast")
+    pin_header = _get("pin_header_text", "📢 Announcement")
+    bcast_hdr  = _get("broadcast_header_text", "📣 Broadcast")
 
     await safeEdit(
         query,
@@ -383,7 +383,7 @@ async def custToggleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     key   = query.data.replace("cust_toggle_", "")
     new   = _toggle(key)
-    label = "ON" if new == "1" else "OFF"
+    label = "ON ✅" if new == "1" else "OFF ❌"
     await query.answer(f"Turned {label}", show_alert=False)
 
     # Re-render parent menu
@@ -441,7 +441,7 @@ async def saveCustSetting(update, context, text: str):
     else:
         _set(key, text)
         await update.message.reply_text(
-            f"<b>Saved</b>\n\n"
+            f"<b>Saved ✅</b>\n\n"
             f"<code>{_SET_LABELS.get(key, key)}</code>\n"
             f"<code>{text[:80]}</code>",
             parse_mode="HTML",

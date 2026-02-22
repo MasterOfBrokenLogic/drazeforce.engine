@@ -1,6 +1,5 @@
 import logging
 import secrets
-import sqlite3
 import string
 from datetime import datetime
 
@@ -23,11 +22,15 @@ async def shortenerMenuCallback(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         total  = cursor.execute(
             "SELECT COUNT(*) FROM shortened_links WHERE created_by=?", (query.from_user.id,)
-        ).fetchone()[0]
+        )
+        total = cursor.fetchone()
+        total = total[0] if total else None
         clicks = cursor.execute(
             "SELECT COALESCE(SUM(clicks),0) FROM shortened_links WHERE created_by=?",
             (query.from_user.id,)
-        ).fetchone()[0]
+        )
+        clicks = cursor.fetchone()
+        clicks = clicks[0] if clicks else None
     except Exception:
         total = clicks = 0
 
@@ -39,8 +42,8 @@ async def shortenerMenuCallback(update: Update, context: ContextTypes.DEFAULT_TY
         "Choose a mode:",
         markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Single",  callback_data="shorten_single"),
-                InlineKeyboardButton("Bulk",    callback_data="shorten_bulk"),
+                InlineKeyboardButton("Single 🔗",  callback_data="shorten_single"),
+                InlineKeyboardButton("Bulk 📋",    callback_data="shorten_bulk"),
             ],
             [InlineKeyboardButton("My Links",      callback_data="shorten_mylinks")],
             [InlineKeyboardButton("Main Menu",     callback_data="back_main")],
@@ -100,10 +103,11 @@ async def shortenerMyLinksCallback(update: Update, context: ContextTypes.DEFAULT
         links = cursor.execute("""
             SELECT short_code, original_url, clicks, created_at
             FROM shortened_links
-            WHERE created_by=?
+            WHERE created_by=%s
             ORDER BY created_at DESC LIMIT 20
-        """, (query.from_user.id,)).fetchall()
-    except sqlite3.Error as e:
+        """, (query.from_user.id,))
+        links = cursor.fetchall()
+    except Exception as e:
         logging.error(f"myLinks: {e}")
         await safeEdit(query, "Failed to load links.", markup=kbBack("shortener_menu"))
         return
@@ -123,7 +127,7 @@ async def shortenerMyLinksCallback(update: Update, context: ContextTypes.DEFAULT
         short   = f"https://t.me/{botName}?start=s_{code}"
         preview = url[:45] + "..." if len(url) > 45 else url
         lines.append(
-            f"\n <code>{short}</code>\n"
+            f"\n🔗 <code>{short}</code>\n"
             f"<code>→  {preview}</code>\n"
             f"<code>Clicks  :  {clicks}</code>"
         )
@@ -157,10 +161,10 @@ async def processSingleShorten(update, context, url: str):
     try:
         cursor.execute("""
             INSERT INTO shortened_links (short_code, original_url, created_by, created_at, clicks)
-            VALUES (?, ?, ?, ?, 0)
+            VALUES (%s, %s, %s, %s, 0)
         """, (code, url, update.effective_user.id, datetime.now().isoformat()))
         conn.commit()
-    except sqlite3.Error as e:
+    except Exception as e:
         logging.error(f"processSingleShorten: {e}")
         await update.message.reply_text("Failed to shorten link.", reply_markup=kbHome())
         return
@@ -200,13 +204,13 @@ async def processBulkShorten(update, context):
         try:
             cursor.execute("""
                 INSERT INTO shortened_links (short_code, original_url, created_by, created_at, clicks)
-                VALUES (?, ?, ?, ?, 0)
+                VALUES (%s, %s, %s, %s, 0)
             """, (code, url, userId, datetime.now().isoformat()))
             conn.commit()
             short = f"https://t.me/{botName}?start=s_{code}"
             results.append(f"✅ <code>{short}</code>")
             ok += 1
-        except sqlite3.Error as e:
+        except Exception as e:
             logging.error(f"bulkShorten: {e}")
             results.append(f"❌ Failed: <code>{url[:45]}</code>")
             fail += 1
@@ -230,8 +234,9 @@ async def handleShortLink(update, context, code: str):
     try:
         row = cursor.execute(
             "SELECT original_url FROM shortened_links WHERE short_code=?", (code,)
-        ).fetchone()
-    except sqlite3.Error as e:
+        )
+        row = cursor.fetchone()
+    except Exception as e:
         logging.error(f"handleShortLink: {e}")
         await update.message.reply_text("Error loading link.")
         return
@@ -256,6 +261,6 @@ async def handleShortLink(update, context, code: str):
         f"<b>Opening Link</b>\n\n<code>{original[:80]}{'...' if len(original)>80 else ''}</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Open", url=original)]
+            [InlineKeyboardButton("Open 🔗", url=original)]
         ]),
     )

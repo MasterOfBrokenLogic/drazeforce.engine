@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from datetime import datetime
 
 from telegram import Update  # type: ignore
@@ -18,30 +17,55 @@ async def statsCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     try:
-        folderCount  = cursor.execute("SELECT COUNT(*) FROM folders").fetchone()[0]
-        fileCount    = cursor.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        totalSize    = cursor.execute("SELECT SUM(file_size) FROM files").fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM folders")
+        folderCount = cursor.fetchone()
+        folderCount = folderCount[0] if folderCount else None
+        cursor.execute("SELECT COUNT(*) FROM files")
+        fileCount = cursor.fetchone()
+        fileCount = fileCount[0] if fileCount else None
+        cursor.execute("SELECT SUM(file_size) FROM files")
+        totalSize = cursor.fetchone()
+        totalSize = (totalSize[0] if totalSize else None) or 0
         activeLinks  = cursor.execute(
-            "SELECT COUNT(*) FROM links WHERE revoked=0 AND datetime(expiry) > datetime('now')"
-        ).fetchone()[0]
+            "SELECT COUNT(*) FROM links WHERE revoked=0 AND expiry > NOW()"
+        )
+        activeLinks = cursor.fetchone()
+        activeLinks = activeLinks[0] if activeLinks else None
         expiredLinks = cursor.execute(
-            "SELECT COUNT(*) FROM links WHERE revoked=0 AND datetime(expiry) <= datetime('now')"
-        ).fetchone()[0]
-        revokedLinks = cursor.execute("SELECT COUNT(*) FROM links WHERE revoked=1").fetchone()[0]
-        totalViews   = cursor.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+            "SELECT COUNT(*) FROM links WHERE revoked=0 AND expiry <= NOW()"
+        )
+        expiredLinks = cursor.fetchone()
+        expiredLinks = expiredLinks[0] if expiredLinks else None
+        cursor.execute("SELECT COUNT(*) FROM links WHERE revoked=1")
+        revokedLinks = cursor.fetchone()
+        revokedLinks = revokedLinks[0] if revokedLinks else None
+        cursor.execute("SELECT COUNT(*) FROM logs")
+        totalViews = cursor.fetchone()
+        totalViews = totalViews[0] if totalViews else None
         views24h     = cursor.execute(
-            "SELECT COUNT(*) FROM logs WHERE datetime(accessed_at) > datetime('now', '-1 day')"
-        ).fetchone()[0]
+            "SELECT COUNT(*) FROM logs WHERE accessed_at > NOW() - INTERVAL '1 day'"
+        )
+        views24h = cursor.fetchone()
+        views24h = views24h[0] if views24h else None
         topFolder    = cursor.execute("""
             SELECT f.name, COUNT(l.id)
             FROM folders f LEFT JOIN logs l ON f.id = l.folder_id
             GROUP BY f.id ORDER BY COUNT(l.id) DESC LIMIT 1
-        """).fetchone()
-        totalSubs   = cursor.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
-        bannedCount = cursor.execute("SELECT COUNT(*) FROM banned_users").fetchone()[0]
-        bcCount     = cursor.execute("SELECT COUNT(*) FROM broadcasts").fetchone()[0]
-        adminCount  = cursor.execute("SELECT COUNT(*) FROM admins").fetchone()[0]
-    except sqlite3.Error as e:
+        """)
+        topFolder = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM subscribers")
+        totalSubs = cursor.fetchone()
+        totalSubs = totalSubs[0] if totalSubs else None
+        cursor.execute("SELECT COUNT(*) FROM banned_users")
+        bannedCount = cursor.fetchone()
+        bannedCount = bannedCount[0] if bannedCount else None
+        cursor.execute("SELECT COUNT(*) FROM broadcasts")
+        bcCount = cursor.fetchone()
+        bcCount = bcCount[0] if bcCount else None
+        cursor.execute("SELECT COUNT(*) FROM admins")
+        adminCount = cursor.fetchone()
+        adminCount = adminCount[0] if adminCount else None
+    except Exception as e:
         logging.error(f"stats: {e}")
         await safeEdit(query, "Failed to load analytics.", markup=kbHome())
         return
@@ -91,8 +115,9 @@ async def activityCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SELECT l.username, l.user_id, f.name, l.accessed_at
             FROM logs l JOIN folders f ON l.folder_id = f.id
             ORDER BY l.accessed_at DESC LIMIT 15
-        """).fetchall()
-    except sqlite3.Error as e:
+        """)
+        rows = cursor.fetchall()
+    except Exception as e:
         logging.error(f"activity: {e}")
         await safeEdit(query, "Failed to load activity.", markup=kbHome())
         return
@@ -129,10 +154,16 @@ async def botStatusCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     started = fmtDt(START_TIME.isoformat())
 
     try:
-        db_folders = cursor.execute("SELECT COUNT(*) FROM folders").fetchone()[0]
-        db_files   = cursor.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        db_subs    = cursor.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
-    except sqlite3.Error:
+        cursor.execute("SELECT COUNT(*) FROM folders")
+        db_folders = cursor.fetchone()
+        db_folders = db_folders[0] if db_folders else None
+        cursor.execute("SELECT COUNT(*) FROM files")
+        db_files = cursor.fetchone()
+        db_files = db_files[0] if db_files else None
+        cursor.execute("SELECT COUNT(*) FROM subscribers")
+        db_subs = cursor.fetchone()
+        db_subs = db_subs[0] if db_subs else None
+    except Exception:
         db_folders = db_files = db_subs = "?"
 
     await safeEdit(

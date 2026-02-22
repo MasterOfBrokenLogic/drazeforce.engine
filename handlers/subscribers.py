@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
 from telegram.ext import ContextTypes  # type: ignore
@@ -13,17 +12,24 @@ async def subscribersCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     try:
-        total   = cursor.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM subscribers")
+        total = cursor.fetchone()
+        total = total[0] if total else None
         active  = cursor.execute(
-            "SELECT COUNT(*) FROM subscribers WHERE datetime(last_active) > datetime('now', '-1 day')"
-        ).fetchone()[0]
+            "SELECT COUNT(*) FROM subscribers WHERE last_active > NOW() - INTERVAL '1 day'"
+        )
+        active = cursor.fetchone()
+        active = active[0] if active else None
         banned  = cursor.execute(
             "SELECT COUNT(*) FROM subscribers WHERE banned=1"
-        ).fetchone()[0]
+        )
+        banned = cursor.fetchone()
+        banned = banned[0] if banned else None
         users   = cursor.execute(
             "SELECT user_id, username, first_name, banned FROM subscribers ORDER BY subscribed_at DESC LIMIT 20"
-        ).fetchall()
-    except sqlite3.Error as e:
+        )
+        users = cursor.fetchall()
+    except Exception as e:
         logging.error(f"subscribers: {e}")
         await safeEdit(query, "Failed to load subscribers.", markup=kbHome())
         return
@@ -55,7 +61,8 @@ async def subInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row    = cursor.execute(
         "SELECT user_id, username, first_name, subscribed_at, last_active, banned FROM subscribers WHERE user_id=?",
         (userId,)
-    ).fetchone()
+    )
+    row = cursor.fetchone()
     if not row:
         await safeEdit(query, "Subscriber not found.", markup=kbBack("subscribers"))
         return
