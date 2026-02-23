@@ -39,8 +39,8 @@ async def shortenerMenuCallback(update: Update, context: ContextTypes.DEFAULT_TY
         "Choose a mode:",
         markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Single",  callback_data="shorten_single"),
-                InlineKeyboardButton("Bulk",    callback_data="shorten_bulk"),
+                InlineKeyboardButton("Single",   callback_data="shorten_single"),
+                InlineKeyboardButton("Bulk",      callback_data="shorten_bulk"),
             ],
             [InlineKeyboardButton("My Links",      callback_data="shorten_mylinks")],
             [InlineKeyboardButton("Main Menu",     callback_data="back_main")],
@@ -123,9 +123,9 @@ async def shortenerMyLinksCallback(update: Update, context: ContextTypes.DEFAULT
         short   = f"https://t.me/{botName}?start=s_{code}"
         preview = url[:45] + "..." if len(url) > 45 else url
         lines.append(
-            f"\n <code>{short}</code>\n"
-            f"<code>→  {preview}</code>\n"
-            f"<code>Clicks  :  {clicks}</code>"
+            f"\n<code>{short}</code>\n"
+            f"<code>Original  :  {preview}</code>\n"
+            f"<code>Clicks    :  {clicks}</code>"
         )
 
     await safeEdit(
@@ -169,7 +169,7 @@ async def processSingleShorten(update, context, url: str):
     short   = f"https://t.me/{botName}?start=s_{code}"
     context.user_data.clear()
     await update.message.reply_text(
-        f"<b>Link Shortened ✅</b>\n\n"
+        f"<b>Link Shortened</b>\n\n"
         f"<code>{short}</code>\n\n"
         f"<code>Original  :  {url[:55]}{'...' if len(url)>55 else ''}</code>",
         parse_mode="HTML",
@@ -193,7 +193,7 @@ async def processBulkShorten(update, context):
         if not url:
             continue
         if not url.startswith(("http://", "https://")):
-            results.append(f"❌ <code>{url[:45]}</code>")
+            results.append(f"<code>{url[:45]}</code>  —  Invalid URL")
             fail += 1
             continue
         code = _makeCode()
@@ -204,11 +204,11 @@ async def processBulkShorten(update, context):
             """, (code, url, userId, datetime.now().isoformat()))
             conn.commit()
             short = f"https://t.me/{botName}?start=s_{code}"
-            results.append(f"✅ <code>{short}</code>")
+            results.append(f"<code>{short}</code>")
             ok += 1
         except sqlite3.Error as e:
             logging.error(f"bulkShorten: {e}")
-            results.append(f"❌ Failed: <code>{url[:45]}</code>")
+            results.append(f"Failed: <code>{url[:45]}</code>")
             fail += 1
 
     context.user_data.clear()
@@ -256,6 +256,6 @@ async def handleShortLink(update, context, code: str):
         f"<b>Opening Link</b>\n\n<code>{original[:80]}{'...' if len(original)>80 else ''}</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Open", url=original)]
+            [InlineKeyboardButton("Open Link", url=original)]
         ]),
     )
