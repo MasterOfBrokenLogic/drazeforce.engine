@@ -115,28 +115,20 @@ async def otpToggleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sendOtpRequestScreen(update, context, folderId: int, folderName: str):
     """Called from start.py when folder has otp_required=1."""
-    user    = update.effective_user
-    botName = (await context.bot.get_me()).username
-
-    # Pre-typed message that opens SA chat
-    saUsername = "drazeforce"
-    pretext    = (
-        f"Hi, I need an OTP to access the folder: {folderName}\n"
-        f"My User ID: {user.id}\n"
-        f"My Username: @{user.username or 'N/A'}"
-    )
-    import urllib.parse
-    saLink = f"https://t.me/{saUsername}?text={urllib.parse.quote(pretext)}"
+    user = update.effective_user
 
     await update.message.reply_text(
         f"<b>OTP Required</b>\n\n"
         f"<code>Folder  :  {folderName}</code>\n\n"
         "This folder is protected by a One-Time Password.\n"
-        "You must request an OTP from the admin to gain access.\n\n"
-        "Once you have your OTP, come back here and enter it.",
+        "Tap the button below to request an OTP from the admin.\n\n"
+        "<i>Once the admin sends your OTP, come back here and enter it.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Request OTP from Admin", url=saLink)],
+            [InlineKeyboardButton(
+                "Request OTP",
+                callback_data=f"otp_request_{folderId}"
+            )],
         ]),
     )
 
@@ -147,12 +139,78 @@ async def sendOtpRequestScreen(update, context, folderId: int, folderName: str):
 
 
 # ─────────────────────────────────────────────
+#  USER — TAPS REQUEST OTP BUTTON
+# ─────────────────────────────────────────────
+
+async def otpRequestCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User taps Request OTP — bot pings SA with Generate OTP button."""
+    query    = update.callback_query
+    await query.answer("Request sent to admin.", show_alert=False)
+
+    folderId = int(query.data.replace("otp_request_", ""))
+    user     = query.from_user
+
+    try:
+        folderName = cursor.execute(
+            "SELECT name FROM folders WHERE id=?", (folderId,)
+        ).fetchone()
+        folderName = folderName[0] if folderName else "Unknown"
+    except sqlite3.Error:
+        folderName = "Unknown"
+
+    # Store state so user can enter OTP when it arrives
+    context.user_data["awaiting_otp_entry"] = True
+    context.user_data["otp_folder_id"]       = folderId
+    context.user_data["otp_attempts"]        = 0
+
+    # Ping SA in-bot
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"<b>OTP Access Request</b>\n\n"
+                f"<code>Folder    :  {folderName}</code>\n"
+                f"<code>User ID   :  {user.id}</code>\n"
+                f"<code>Username  :  @{user.username or 'N/A'}</code>\n"
+                f"<code>Name      :  {user.first_name}</code>\n\n"
+                "Tap Generate OTP to create a one-time code for this user."
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "Generate OTP",
+                    callback_data=f"otp_gen_{folderId}_{user.id}"
+                )]
+            ]),
+        )
+    except Exception as e:
+        logging.error(f"otpRequestCallback notify SA: {e}")
+
+    # Update the user's message to confirm request sent
+    try:
+        await query.edit_message_text(
+            f"<b>OTP Requested</b>\n\n"
+            f"<code>Folder  :  {folderName}</code>\n\n"
+            "Your request has been sent to the admin.\n"
+            "You will receive your OTP shortly.\n\n"
+            "<i>Once you have it, type it here in the chat.</i>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────
 #  SA — GENERATE OTP (called from messages.py)
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────
+#  SA — GENERATE & SEND OTP IN ONE TAP
+# ─────────────────────────────────────────────
+
 async def otpGenerateCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """SA taps Generate OTP button from the in-bot alert."""
-    query    = update.callback_query
+    """SA taps Generate & Send OTP — creates code and delivers it to user instantly."""
+    query = update.callback_query
     await query.answer()
 
     if not isSuperAdmin(query.from_user.id):
@@ -173,17 +231,16 @@ async def otpGenerateCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         folderName, expiryMins = row
 
-        # Check user exists
-        userRow = cursor.execute(
+        userRow   = cursor.execute(
             "SELECT first_name, username FROM subscribers WHERE user_id=?", (userId,)
         ).fetchone()
-        firstName = userRow[0] if userRow else "Unknown"
+        firstName = userRow[0] if userRow else "User"
         username  = userRow[1] if userRow else "N/A"
 
         code      = _genOtp()
         expiresAt = (datetime.now() + timedelta(minutes=expiryMins)).isoformat()
 
-        # Invalidate any old pending OTPs for this user+folder
+        # Revoke any old pending OTPs for this user+folder
         cursor.execute(
             "UPDATE folder_otps SET status='revoked' WHERE folder_id=? AND user_id=? AND status='pending'",
             (folderId, userId)
@@ -200,63 +257,7 @@ async def otpGenerateCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("Database error.", show_alert=True)
         return
 
-    await safeEdit(
-        query,
-        f"<b>OTP Generated</b>\n\n"
-        f"<code>Folder   :  {folderName}</code>\n"
-        f"<code>User     :  {firstName}  (@{username})</code>\n"
-        f"<code>User ID  :  {userId}</code>\n\n"
-        f"<code>OTP Code :  {code}</code>\n\n"
-        f"<code>Expires  :  {expiryMins} minute(s) after delivery</code>\n\n"
-        "Tap Send to deliver this OTP to the user.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                "Send OTP to User",
-                callback_data=f"otp_send_{folderId}_{userId}"
-            )],
-            [InlineKeyboardButton("Cancel", callback_data="back_main")],
-        ]),
-    )
-
-
-async def otpSendCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """SA taps Send OTP to User — bot delivers OTP message to the user."""
-    query = update.callback_query
-    await query.answer()
-
-    if not isSuperAdmin(query.from_user.id):
-        await query.answer("Only the Super Admin can send OTPs.", show_alert=True)
-        return
-
-    parts    = query.data.replace("otp_send_", "").split("_")
-    folderId = int(parts[0])
-    userId   = int(parts[1])
-
-    try:
-        otpRow = cursor.execute(
-            "SELECT code, expires_at FROM folder_otps "
-            "WHERE folder_id=? AND user_id=? AND status='pending' "
-            "ORDER BY created_at DESC LIMIT 1",
-            (folderId, userId)
-        ).fetchone()
-        if not otpRow:
-            await query.answer("No pending OTP found. Generate one first.", show_alert=True)
-            return
-
-        code, expiresAt = otpRow
-        folderName = cursor.execute(
-            "SELECT name FROM folders WHERE id=?", (folderId,)
-        ).fetchone()[0]
-        expiryMins = cursor.execute(
-            "SELECT otp_expiry_minutes FROM folders WHERE id=?", (folderId,)
-        ).fetchone()[0]
-
-    except sqlite3.Error as e:
-        logging.error(f"otpSend: {e}")
-        await query.answer("Database error.", show_alert=True)
-        return
-
+    # Send OTP directly to user
     try:
         await context.bot.send_message(
             chat_id=userId,
@@ -271,21 +272,25 @@ async def otpSendCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
     except Exception as e:
-        logging.error(f"otpSend deliver: {e}")
+        logging.error(f"otpGenerate deliver: {e}")
         await safeEdit(
             query,
-            "<b>Failed to Send</b>\n\nCould not deliver OTP to the user.\n"
+            "<b>Failed to Send</b>\n\n"
+            "Could not deliver the OTP to the user.\n"
             "They may not have started the bot yet.",
             markup=kbHome(),
             parse_mode="HTML",
         )
         return
 
+    # Update SA's message to confirm
     await safeEdit(
         query,
         f"<b>OTP Sent</b>\n\n"
-        f"<code>Code  :  {code}</code>\n"
-        f"<code>User  :  {userId}</code>\n\n"
+        f"<code>Folder   :  {folderName}</code>\n"
+        f"<code>User     :  {firstName}  (@{username})</code>\n"
+        f"<code>OTP Code :  {code}</code>\n"
+        f"<code>Expires  :  {expiryMins} minute(s)</code>\n\n"
         "The OTP has been delivered to the user.",
         markup=kbHome(),
         parse_mode="HTML",

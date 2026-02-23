@@ -144,7 +144,6 @@ async def _handleToken(update, context, token, user):
 
     if otpRequired:
         from handlers.otp import sendOtpRequestScreen
-        await _notifySaOtpRequest(update, context, folderId, folderName, user)
         await sendOtpRequestScreen(update, context, folderId, folderName)
         return
 
