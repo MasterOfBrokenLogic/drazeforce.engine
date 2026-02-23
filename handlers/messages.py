@@ -1158,7 +1158,8 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 context.user_data["file_count"] += 1
                 await update.message.reply_text(
-                    f"<b>{ftype.upper()} saved</b>  |  Total: {context.user_data['file_count']}"
+                    f"<b>{ftype.upper()} saved</b>  |  Total: {context.user_data['file_count']}",
+                    parse_mode="HTML",
                 )
             except sqlite3.Error as e:
                 logging.error(f"upload: {e}")
@@ -1169,7 +1170,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("add_media_mode"):
         folderName = context.user_data["add_media_mode"]
         folderId   = context.user_data["add_media_folder_id"]
-        if text and text.upper() == "DONE":
+        if text and text.upper() == "END":
             count = context.user_data.get("file_count", 0)
             context.user_data.clear()
             await update.message.reply_text(
@@ -1198,7 +1199,8 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
                 await update.message.reply_text(
-                    f"<b>{ftype.upper()} added</b>  |  Total: {context.user_data['file_count']}"
+                    f"<b>{ftype.upper()} added</b>  |  Total: {context.user_data['file_count']}",
+                    parse_mode="HTML",
                 )
             except sqlite3.Error as e:
                 logging.error(f"addMedia: {e}")

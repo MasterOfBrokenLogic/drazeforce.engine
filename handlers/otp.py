@@ -27,6 +27,39 @@ def _otpFolderInfo(folderId: int):
 
 
 # ─────────────────────────────────────────────
+#  MENU
+# ─────────────────────────────────────────────
+
+async def otpMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        total = cursor.execute(
+            "SELECT COUNT(*) FROM folders WHERE otp_required=1"
+        ).fetchone()[0]
+        pending = cursor.execute(
+            "SELECT COUNT(*) FROM folder_otps WHERE status='pending'"
+        ).fetchone()[0]
+    except Exception:
+        total = pending = 0
+
+    await safeEdit(
+        query,
+        "<b>OTP Access</b>\n\n"
+        f"<code>OTP-protected folders  :  {total}</code>\n"
+        f"<code>Pending OTP requests   :  {pending}</code>\n\n"
+        "To require OTP on a folder, open the folder menu and tap <b>Require OTP</b>.\n\n"
+        "<i>Only the Super Admin can enable or disable OTP access on folders.</i>",
+        markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("View Folders", callback_data="view_folders")],
+            [InlineKeyboardButton("Main Menu",    callback_data="back_main")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+# ─────────────────────────────────────────────
 #  FOLDER MENU — OTP TOGGLE (Super Admin only)
 # ─────────────────────────────────────────────
 

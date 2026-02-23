@@ -76,7 +76,7 @@ from handlers.settings import (
     getQuoteCallback,
 )
 from handlers.otp import (
-    otpToggleCallback, otpGenerateCallback, otpSendCallback,
+    otpMenuCallback, otpToggleCallback, otpGenerateCallback, otpSendCallback,
 )
 from handlers.customize import (
     customizeMenuCallback,
@@ -246,6 +246,7 @@ def main():
     app.add_handler(CallbackQueryHandler(trendingClearConfirmCallback, pattern="^trending_clear_confirm$"))
 
     # OTP Access
+    app.add_handler(CallbackQueryHandler(otpMenuCallback,     pattern="^otp_menu$"))
     app.add_handler(CallbackQueryHandler(otpToggleCallback,   pattern="^otp_toggle_\\d+$"))
     app.add_handler(CallbackQueryHandler(otpGenerateCallback, pattern="^otp_gen_\\d+_\\d+$"))
     app.add_handler(CallbackQueryHandler(otpSendCallback,     pattern="^otp_send_\\d+_\\d+$"))
