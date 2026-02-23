@@ -263,9 +263,9 @@ async def otpGenerateCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             chat_id=userId,
             text=(
                 f"<b>Your One-Time Password</b>\n\n"
-                f"<code>Folder   :  {folderName}</code>\n\n"
-                f"<code>OTP Code :  {code}</code>\n\n"
-                f"<code>Expires  :  {expiryMins} minute(s) from now</code>\n\n"
+                f"Folder   :  <code>{folderName}</code>\n"
+                f"OTP Code :  <code>{code}</code>\n"
+                f"Expires  :  <code>{expiryMins} minute(s) from now</code>\n\n"
                 "Go back to the bot and enter this code to access the folder.\n"
                 "<i>This code can only be used once.</i>"
             ),
