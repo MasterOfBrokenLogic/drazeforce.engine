@@ -378,6 +378,54 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         return
 
+    # ── OTP entry (user entering their OTP code) ─────────────────────────
+    if context.user_data.get("awaiting_otp_entry"):
+        if not text:
+            await update.message.reply_text("Please enter your OTP code as text.")
+            return
+        from handlers.otp import verifyOtpEntry
+        await verifyOtpEntry(update, context, text)
+        return
+
+    # ── OTP expiry setup (SA setting expiry minutes for a folder) ────────
+    if context.user_data.get("awaiting_otp_expiry"):
+        folderId = context.user_data.get("otp_setup_folder_id")
+        if not text or not text.strip().isdigit():
+            await update.message.reply_text(
+                "<b>Invalid Input</b>\n\nPlease enter a number between 1 and 60.",
+                parse_mode="HTML",
+            )
+            return
+        mins = int(text.strip())
+        if not (1 <= mins <= 60):
+            await update.message.reply_text(
+                "<b>Out of Range</b>\n\nPlease enter a number between 1 and 60.",
+                parse_mode="HTML",
+            )
+            return
+        try:
+            cursor.execute(
+                "UPDATE folders SET otp_required=1, otp_expiry_minutes=? WHERE id=?",
+                (mins, folderId)
+            )
+            conn.commit()
+        except Exception as e:
+            logging.error(f"otpExpiry set: {e}")
+            await update.message.reply_text("Database error.", reply_markup=kbHome())
+            context.user_data.clear()
+            return
+        context.user_data.clear()
+        await update.message.reply_text(
+            f"<b>OTP Access Enabled</b>\n\n"
+            f"<code>Expiry  :  {mins} minute(s)</code>\n\n"
+            "Users who open the folder link will be required to request an OTP from you before access is granted.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Back to Folder", callback_data=f"foldermenu_{folderId}")],
+            ]),
+        )
+        return
+
     # ── Password verify (link access) — must be before admin gate ─────────
     if context.user_data.get("awaiting_password_verify"):
         folderId = context.user_data.get("verify_folder_id")
@@ -1076,119 +1124,16 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("upload_mode"):
         folderName = context.user_data["upload_mode"]
         if text and text.upper() == "END":
-            count      = context.user_data.get("file_count", 0)
-            type_tally = context.user_data.get("upload_type_tally", {})
-            total_size = context.user_data.get("upload_total_size", 0)
-            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
-            try:
-                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
-            except Exception:
-                folderId = None
+            count    = context.user_data.get("file_count", 0)
+            folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
             context.user_data.clear()
-
-            from helpers import fmtSize, fmtDt
-            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
-            type_lines = ""
-            for k in ("video", "photo", "document", "text"):
-                n = type_tally.get(k, 0)
-                if n:
-                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
-
-            summary = (
-                f"<b>Upload Complete</b>\n"
-                f"<code>{'─' * 28}</code>\n\n"
-                f"<b>Folder</b>\n"
-                f"<code>  Name         {folderName}</code>\n"
-                f"<code>  Total files  {count}</code>\n"
-                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
-                f"<b>Breakdown</b>"
-                f"{type_lines}\n\n"
-                f"<b>Session</b>\n"
-                f"<code>  Started      {fmtDt(started_at)}</code>\n"
-                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
-            )
-            buttons = []
-            if folderId:
-                buttons.append([InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")])
-                buttons.append([InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")])
-            buttons.append([InlineKeyboardButton("Main Menu", callback_data="back_main")])
-            await update.message.reply_text(summary, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
-            return
-
-        fid, ftype, fsize, txt = None, None, None, None
-        if update.message.video:
-            fid, ftype, fsize = update.message.video.file_id, "video", update.message.video.file_size
-        elif update.message.photo:
-            fid, ftype, fsize = update.message.photo[-1].file_id, "photo", update.message.photo[-1].file_size
-        elif update.message.document:
-            fid, ftype, fsize = update.message.document.file_id, "document", update.message.document.file_size
-        elif text:
-            ftype, txt, fsize = "text", text, len(text.encode())
-        if ftype:
-            try:
-                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
-                cursor.execute(
-                    "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
-                )
-                conn.commit()
-                context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
-                tally = context.user_data.setdefault("upload_type_tally", {})
-                tally[ftype] = tally.get(ftype, 0) + 1
-                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
-                if "upload_started_at" not in context.user_data:
-                    context.user_data["upload_started_at"] = datetime.now().isoformat()
-                cnt = context.user_data["file_count"]
-                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
-                await update.message.reply_text(
-                    f"<b>{lbl}</b>  <i>saved</i>\n"
-                    f"<code>Total  :  {cnt} file(s)</code>",
-                    parse_mode="HTML",
-                )
-            except sqlite3.Error as e:
-                logging.error(f"upload: {e}")
-                await update.message.reply_text("Failed to save file.", reply_markup=kbHome())
-        return
-
-    # ── Add media mode (existing folder) ─────────────────────────────────
-    if context.user_data.get("add_media_mode"):
-        folderName = context.user_data["add_media_mode"]
-        folderId   = context.user_data["add_media_folder_id"]
-        if text and text.upper() == "END":
-            count      = context.user_data.get("file_count", 0)
-            type_tally = context.user_data.get("upload_type_tally", {})
-            total_size = context.user_data.get("upload_total_size", 0)
-            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
-            context.user_data.clear()
-
-            from helpers import fmtSize, fmtDt
-            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
-            type_lines = ""
-            for k in ("video", "photo", "document", "text"):
-                n = type_tally.get(k, 0)
-                if n:
-                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
-
-            summary = (
-                f"<b>Upload Complete</b>\n"
-                f"<code>{'─' * 28}</code>\n\n"
-                f"<b>Folder</b>\n"
-                f"<code>  Name         {folderName}</code>\n"
-                f"<code>  Total files  {count}</code>\n"
-                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
-                f"<b>Breakdown</b>"
-                f"{type_lines}\n\n"
-                f"<b>Session</b>\n"
-                f"<code>  Started      {fmtDt(started_at)}</code>\n"
-                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
-            )
             await update.message.reply_text(
-                summary,
+                f"<b>Upload Complete</b>\n\n"
+                f"<code>{folderName}</code>  |  {count} file(s) added",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("View Folder", callback_data=f"foldermenu_{folderId}")],
-                    [InlineKeyboardButton("Main Menu",   callback_data="back_main")],
+                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")],
+                    [InlineKeyboardButton("Main Menu",    callback_data="back_main")],
                 ]),
             )
             return
@@ -1204,6 +1149,47 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ftype, txt, fsize = "text", text, len(text.encode())
         if ftype:
             try:
+                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
+                cursor.execute(
+                    "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
+                )
+                conn.commit()
+                context.user_data["file_count"] += 1
+                await update.message.reply_text(
+                    f"<b>{ftype.upper()} saved</b>  |  Total: {context.user_data['file_count']}"
+                )
+            except sqlite3.Error as e:
+                logging.error(f"upload: {e}")
+                await update.message.reply_text("Failed to save file.", reply_markup=kbHome())
+        return
+
+    # ── Add media mode (existing folder) ─────────────────────────────────
+    if context.user_data.get("add_media_mode"):
+        folderName = context.user_data["add_media_mode"]
+        folderId   = context.user_data["add_media_folder_id"]
+        if text and text.upper() == "DONE":
+            count = context.user_data.get("file_count", 0)
+            context.user_data.clear()
+            await update.message.reply_text(
+                f"<b>Done</b>\n\n{count} file(s) added to <code>{folderName}</code>.",
+                parse_mode="HTML",
+                reply_markup=kbBack(f"foldermenu_{folderId}"),
+            )
+            return
+
+        fid, ftype, fsize, txt = None, None, None, None
+        if update.message.video:
+            fid, ftype, fsize = update.message.video.file_id, "video", update.message.video.file_size
+        elif update.message.photo:
+            fid, ftype, fsize = update.message.photo[-1].file_id, "photo", update.message.photo[-1].file_size
+        elif update.message.document:
+            fid, ftype, fsize = update.message.document.file_id, "document", update.message.document.file_size
+        elif text:
+            ftype, txt, fsize = "text", text, len(text.encode())
+        if ftype:
+            try:
                 cursor.execute(
                     "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1211,17 +1197,8 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
-                tally = context.user_data.setdefault("upload_type_tally", {})
-                tally[ftype] = tally.get(ftype, 0) + 1
-                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
-                if "upload_started_at" not in context.user_data:
-                    context.user_data["upload_started_at"] = datetime.now().isoformat()
-                cnt = context.user_data["file_count"]
-                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"<b>{lbl}</b>  <i>saved</i>\n"
-                    f"<code>Total  :  {cnt} file(s)</code>",
-                    parse_mode="HTML",
+                    f"<b>{ftype.upper()} added</b>  |  Total: {context.user_data['file_count']}"
                 )
             except sqlite3.Error as e:
                 logging.error(f"addMedia: {e}")

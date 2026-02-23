@@ -88,7 +88,7 @@ async def folderMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     folderId = int(query.data.replace("foldermenu_", ""))
     try:
         folder    = cursor.execute(
-            "SELECT name, password, pinned, note FROM folders WHERE id=?", (folderId,)
+            "SELECT name, password, pinned, note, otp_required, otp_expiry_minutes FROM folders WHERE id=?", (folderId,)
         ).fetchone()
         fileCount = cursor.execute(
             "SELECT COUNT(*) FROM files WHERE folder_id=?", (folderId,)
@@ -105,11 +105,14 @@ async def folderMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await safeEdit(query, "Folder not found.", markup=kbHome())
         return
 
-    folderName, password, pinned, note = folder
+    folderName, password, pinned, note, otpRequired, otpExpiry = folder
     pwLabel  = "Remove Password" if password else "Set Password"
     pinLabel = "Unpin" if pinned else "Pin"
+    otpLabel = "Disable OTP" if otpRequired else "Require OTP"
 
-    from helpers import fmtSize
+    from helpers import fmtSize, isSuperAdmin
+    showOtp  = isSuperAdmin(query.from_user.id)
+
     buttons = [
         [
             InlineKeyboardButton("Preview",       callback_data=f"preview_{folderId}"),
@@ -127,9 +130,14 @@ async def folderMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             InlineKeyboardButton("Add Note",      callback_data=f"note_{folderId}"),
             InlineKeyboardButton("Delete Folder", callback_data=f"delete_select_{folderId}"),
         ],
-        [InlineKeyboardButton("Back", callback_data="view_folders")],
     ]
+    if showOtp:
+        buttons.append([InlineKeyboardButton(otpLabel, callback_data=f"otp_toggle_{folderId}")])
+    buttons.append([InlineKeyboardButton("Back", callback_data="view_folders")])
 
+    otpLine  = ""
+    if otpRequired:
+        otpLine = f"\n<code>OTP      :  Required  ({otpExpiry} min)</code>"
     note_line = f"\n<code>Note     :  {note}</code>" if note else ""
 
     await safeEdit(
@@ -139,6 +147,7 @@ async def folderMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<code>Size     :  {fmtSize(totalSize)}</code>\n"
         f"<code>Password :  {'Set' if password else 'None'}</code>\n"
         f"<code>Pinned   :  {'Yes' if pinned else 'No'}</code>"
+        f"{otpLine}"
         f"{note_line}",
         markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",

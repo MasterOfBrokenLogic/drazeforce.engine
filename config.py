@@ -333,15 +333,29 @@ for _tbl, _col, _type, _default in _v31_migrations:
 
 # ── v4.0 schema additions ──
 _v4_script = """
-CREATE TABLE IF NOT EXISTS shortened_links (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    short_code   TEXT UNIQUE,
-    original_url TEXT,
-    created_by   INTEGER,
-    created_at   TEXT,
-    clicks       INTEGER DEFAULT 0
+CREATE TABLE IF NOT EXISTS folder_otps (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id   INTEGER,
+    user_id     INTEGER,
+    code        TEXT,
+    created_at  TEXT,
+    expires_at  TEXT,
+    status      TEXT DEFAULT 'pending'
 );
-CREATE INDEX IF NOT EXISTS idx_short_code ON shortened_links(short_code);
+CREATE INDEX IF NOT EXISTS idx_otp_folder_user ON folder_otps(folder_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_otp_status      ON folder_otps(status);
 """
 cursor.executescript(_v4_script)
 conn.commit()
+
+# ── v4.0 folder column migrations ──
+_v4_folder_migrations = [
+    ("folders", "otp_required",       "INTEGER", "0"),
+    ("folders", "otp_expiry_minutes", "INTEGER", "NULL"),
+]
+for _tbl, _col, _type, _default in _v4_folder_migrations:
+    try:
+        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass

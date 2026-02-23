@@ -75,9 +75,8 @@ from handlers.settings import (
     settingsLinkstatsCallback, linkstatsViewCallback,
     getQuoteCallback,
 )
-from handlers.shortener import (
-    shortenerMenuCallback, shortenerSingleCallback,
-    shortenerBulkCallback, shortenerMyLinksCallback,
+from handlers.otp import (
+    otpToggleCallback, otpGenerateCallback, otpSendCallback,
 )
 from handlers.customize import (
     customizeMenuCallback,
@@ -246,11 +245,10 @@ def main():
     app.add_handler(CallbackQueryHandler(trendingClearCallback,        pattern="^trending_clear$"))
     app.add_handler(CallbackQueryHandler(trendingClearConfirmCallback, pattern="^trending_clear_confirm$"))
 
-    # Shortener
-    app.add_handler(CallbackQueryHandler(shortenerMenuCallback,    pattern="^shortener_menu$"))
-    app.add_handler(CallbackQueryHandler(shortenerSingleCallback,  pattern="^shorten_single$"))
-    app.add_handler(CallbackQueryHandler(shortenerBulkCallback,    pattern="^shorten_bulk$"))
-    app.add_handler(CallbackQueryHandler(shortenerMyLinksCallback, pattern="^shorten_mylinks$"))
+    # OTP Access
+    app.add_handler(CallbackQueryHandler(otpToggleCallback,   pattern="^otp_toggle_\\d+$"))
+    app.add_handler(CallbackQueryHandler(otpGenerateCallback, pattern="^otp_gen_\\d+_\\d+$"))
+    app.add_handler(CallbackQueryHandler(otpSendCallback,     pattern="^otp_send_\\d+_\\d+$"))
 
     # Customize
     app.add_handler(CallbackQueryHandler(customizeMenuCallback,   pattern="^customize_menu$"))

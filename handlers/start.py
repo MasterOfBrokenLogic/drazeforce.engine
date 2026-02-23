@@ -3,7 +3,7 @@ import logging
 import sqlite3
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
+from telegram import Update  # type: ignore
 from telegram.ext import ContextTypes  # type: ignore
 
 from config import conn, cursor, ADMIN_ID
@@ -132,12 +132,20 @@ async def _handleToken(update, context, token, user):
 
     try:
         row = cursor.execute(
-            "SELECT password FROM folders WHERE id=?", (folderId,)
+            "SELECT password, otp_required, name FROM folders WHERE id=?", (folderId,)
         ).fetchone()
         folderPassword = row[0] if row else None
+        otpRequired    = row[1] if row else 0
+        folderName     = row[2] if row else ""
     except sqlite3.Error as e:
         logging.error(f"_handleToken folder: {e}")
         await update.message.reply_text("A database error occurred.")
+        return
+
+    if otpRequired:
+        from handlers.otp import sendOtpRequestScreen
+        await _notifySaOtpRequest(update, context, folderId, folderName, user)
+        await sendOtpRequestScreen(update, context, folderId, folderName)
         return
 
     if folderPassword:
@@ -157,6 +165,121 @@ async def _handleToken(update, context, token, user):
         return
 
     await _deliverFolder(update, context, folderId, token, user)
+
+
+async def _notifySaOtpRequest(update, context, folderId: int, folderName: str, user):
+    """Ping the SA in-bot when a user requests OTP access."""
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"<b>OTP Access Request</b>\n\n"
+                f"<code>Folder    :  {folderName}</code>\n"
+                f"<code>User ID   :  {user.id}</code>\n"
+                f"<code>Username  :  @{user.username or 'N/A'}</code>\n"
+                f"<code>Name      :  {user.first_name}</code>\n\n"
+                "Tap Generate OTP to create a one-time code for this user."
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "Generate OTP",
+                    callback_data=f"otp_gen_{folderId}_{user.id}"
+                )]
+            ]),
+        )
+    except Exception as e:
+        logging.error(f"_notifySaOtpRequest: {e}")
+
+
+async def _deliverFolderOtp(update, context, folderId: int):
+    """Deliver folder content after successful OTP verification (no token)."""
+    user = update.effective_user
+    try:
+        files = cursor.execute(
+            "SELECT file_id, file_type, text_content FROM files WHERE folder_id=?", (folderId,)
+        ).fetchall()
+        folder = cursor.execute(
+            "SELECT forwardable, auto_delete_minutes, name FROM folders WHERE id=?", (folderId,)
+        ).fetchone()
+    except sqlite3.Error as e:
+        logging.error(f"_deliverFolderOtp: {e}")
+        await update.message.reply_text("A database error occurred.")
+        return
+
+    if not files:
+        await update.message.reply_text(
+            "<b>Empty Folder</b>\n\nThis folder currently has no content.",
+            parse_mode="HTML",
+        )
+        return
+
+    forwardable, autoDelete, folderName = folder
+    protect = forwardable == 0
+
+    cancelKey = f"cancel_delivery_{user.id}"
+    context.bot_data[cancelKey] = False
+
+    cancelMsg = await update.message.reply_text(
+        f"<b>Access Granted</b>\n\n"
+        f"<code>Folder  :  {folderName}</code>\n"
+        f"<code>Files   :  {len(files)}</code>\n\n"
+        "Sending content now...",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Cancel Delivery", callback_data=f"cancel_delivery_{user.id}")]
+        ]),
+    )
+    sentMessages = [cancelMsg]
+
+    if autoDelete:
+        msg = await update.message.reply_text(
+            f"<b>Note</b>\n\nThis content will be deleted in <code>{autoDelete}</code> minute(s).",
+            parse_mode="HTML",
+        )
+        sentMessages.append(msg)
+
+    for fileId, fileType, textContent in files:
+        if context.bot_data.get(cancelKey):
+            await update.message.reply_text(
+                "<b>Delivery Cancelled</b>\n\nContent delivery was stopped.",
+                parse_mode="HTML",
+            )
+            context.bot_data.pop(cancelKey, None)
+            return
+        try:
+            if fileType == "text":
+                msg = await update.message.reply_text(textContent)
+            elif fileType == "video":
+                msg = await update.message.reply_video(fileId, protect_content=protect, has_spoiler=True)
+            elif fileType == "photo":
+                msg = await update.message.reply_photo(fileId, protect_content=protect, has_spoiler=True)
+            elif fileType == "document":
+                msg = await update.message.reply_document(fileId, protect_content=protect)
+            else:
+                msg = await update.message.reply_document(fileId, protect_content=protect)
+            sentMessages.append(msg)
+        except Exception as e:
+            logging.error(f"_deliverFolderOtp send: {e}")
+
+    context.bot_data.pop(cancelKey, None)
+    try:
+        await cancelMsg.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if autoDelete:
+        import asyncio
+        asyncio.create_task(deleteAll(sentMessages, autoDelete * 60))
+
+    try:
+        cursor.execute(
+            "INSERT INTO logs (user_id, username, folder_id, accessed_at) VALUES (?, ?, ?, ?)",
+            (user.id, user.username, folderId, datetime.now().isoformat()),
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        logging.error(f"_deliverFolderOtp log: {e}")
 
 
 async def _deliverFolder(update, context, folderId, token, user):

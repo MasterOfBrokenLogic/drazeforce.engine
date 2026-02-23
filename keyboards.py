@@ -32,7 +32,7 @@ def kbMain() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Trending",      callback_data="trending_menu"),
         ],
         [
-            InlineKeyboardButton("Shorten Links", callback_data="shortener_menu"),
+            InlineKeyboardButton("OTP Access",    callback_data="otp_menu"),
             InlineKeyboardButton("Customize",     callback_data="customize_menu"),
         ],
         [
