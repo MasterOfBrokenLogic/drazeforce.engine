@@ -50,7 +50,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Show verification prompt if not verified
         if not isVerified(userId):
-            from telegram import KeyboardButton, ReplyKeyboardMarkup # type: ignore
+            from telegram import KeyboardButton, ReplyKeyboardMarkup
             await update.message.reply_text(
                 f"<b>Welcome, {user.first_name}</b>\n\n"
                 "Before you continue, please verify your phone number.\n"
@@ -98,7 +98,7 @@ async def _handleToken(update, context, token, user):
         return
 
     if not isAdmin(userId) and not isVerified(userId):
-        from telegram import KeyboardButton, ReplyKeyboardMarkup # type: ignore
+        from telegram import KeyboardButton, ReplyKeyboardMarkup
         await update.message.reply_text(
             "<b>Verification Required</b>\n\n"
             "You need to verify your phone number before opening folder links.\n\n"
@@ -458,7 +458,7 @@ async def _deliverFolder(update, context, folderId, token, user):
 
 async def contactHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles phone number shared via contact button."""
-    from telegram import ReplyKeyboardRemove # type: ignore
+    from telegram import ReplyKeyboardRemove
     user    = update.effective_user
     contact = update.message.contact
 
@@ -481,6 +481,22 @@ async def contactHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"contactHandler: {e}")
         await update.message.reply_text("A database error occurred. Please try again.")
         return
+
+    # Notify SA
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"<b>Phone Verified</b>\n\n"
+                f"Name      :  <code>{user.first_name}</code>\n"
+                f"Username  :  <code>@{user.username or 'N/A'}</code>\n"
+                f"User ID   :  <code>{user.id}</code>\n"
+                f"Phone     :  <code>{phone}</code>"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logging.error(f"contactHandler SA notify: {e}")
 
     custom = cursor.execute(
         "SELECT value FROM bot_settings WHERE key='welcome_message'"
