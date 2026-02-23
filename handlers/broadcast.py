@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -52,7 +53,7 @@ async def broadcastPasswordCallback(update: Update, context: ContextTypes.DEFAUL
         await safeEdit(
             query,
             "<b>Auto-Delete</b>\n\n"
-            "Should the broadcast content auto-delete after being received%s",
+            "Should the broadcast content auto-delete after being received?",
             markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Yes", callback_data="broadcast_exp_yes"),
@@ -78,7 +79,7 @@ async def broadcastExpiryCallback(update: Update, context: ContextTypes.DEFAULT_
         await safeEdit(
             query,
             "<b>Forward Permission</b>\n\n"
-            "Should recipients be allowed to forward the broadcast content%s",
+            "Should recipients be allowed to forward the broadcast content?",
             markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Allow", callback_data="broadcast_fwd_yes"),
@@ -109,7 +110,7 @@ async def broadcastForwardCallback(update: Update, context: ContextTypes.DEFAULT
         f"<code>Password    :  {password if password else 'None'}</code>\n"
         f"<code>Auto-delete :  {str(expiry) + ' min' if expiry else 'Off'}</code>\n"
         f"<code>Forwardable :  {'Yes' if fwd else 'No'}</code>\n\n"
-        "Ready to send to all subscribers%s",
+        "Ready to send to all subscribers?",
         markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("Send Now", callback_data="broadcast_publish"),
@@ -131,9 +132,8 @@ async def broadcastPublishCallback(update: Update, context: ContextTypes.DEFAULT
     try:
         subscribers = cursor.execute(
             "SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL"
-        )
-        subscribers = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"broadcastPublish sub: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         context.user_data.clear()
@@ -160,16 +160,16 @@ async def broadcastPublishCallback(update: Update, context: ContextTypes.DEFAULT
         cursor.execute("""
             INSERT INTO broadcasts
                 (broadcast_code, created_by, created_at, password, expiry_minutes, forwardable, status)
-            VALUES (%s, %s, %s, %s, %s, %s, 'sent')
+            VALUES (?, ?, ?, ?, ?, ?, 'sent')
         """, (code, query.from_user.id, datetime.now().isoformat(), pwd, expiry, fwd))
-        broadcastId = cursor.fetchone()[0]
+        broadcastId = cursor.lastrowid
         for f in files:
             cursor.execute(
-                "INSERT INTO broadcast_files (broadcast_id, file_id, file_type, text_content) VALUES (%s, %s, %s, %s)",
+                "INSERT INTO broadcast_files (broadcast_id, file_id, file_type, text_content) VALUES (?, ?, ?, ?)",
                 (broadcastId, f.get("file_id"), f.get("file_type"), f.get("text_content"))
             )
         conn.commit()
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"broadcastPublish save: {e}")
         await safeEdit(query, "Failed to save broadcast.", markup=kbHome())
         context.user_data.clear()
@@ -239,11 +239,11 @@ async def broadcastPublishCallback(update: Update, context: ContextTypes.DEFAULT
 
     try:
         cursor.execute(
-            "UPDATE broadcasts SET total_sent=%s, total_failed=%s WHERE id=%s",
+            "UPDATE broadcasts SET total_sent=?, total_failed=? WHERE id=?",
             (sent, failed, broadcastId)
         )
         conn.commit()
-    except Exception:
+    except sqlite3.Error:
         pass
 
     context.user_data.clear()

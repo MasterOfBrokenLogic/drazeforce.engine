@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -18,8 +19,7 @@ async def addMediaCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query    = update.callback_query
     await query.answer()
     folderId = int(query.data.replace("addmedia_", ""))
-    cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-    folder = cursor.fetchone()
+    folder   = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
     if not folder:
         await safeEdit(query, "Folder not found.", markup=kbHome())
         return
@@ -30,7 +30,7 @@ async def addMediaCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query,
         f"<b>Add Files</b>  |  <code>{folder[0]}</code>\n\n"
         "Send any files, photos, videos, or text messages.\n\n"
-        "Type <code>DONE</code> when you have finished uploading.",
+        "Type <code>END</code> when you have finished uploading.",
         markup=kbBack(f"foldermenu_{folderId}"),
         parse_mode="HTML",
     )
@@ -49,11 +49,9 @@ async def deleteMediaCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             "SELECT id, file_type, text_content, uploaded_at FROM files "
             "WHERE folder_id=? ORDER BY uploaded_at DESC",
             (folderId,)
-        )
-        files = cursor.fetchall()
-        cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-        folder = cursor.fetchone()
-    except Exception as e:
+        ).fetchall()
+        folder = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
+    except sqlite3.Error as e:
         logging.error(f"deleteMedia: {e}")
         await safeEdit(query, "Database error.", markup=kbHome())
         return
@@ -118,11 +116,9 @@ async def toggleFileCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "SELECT id, file_type, text_content, uploaded_at FROM files "
             "WHERE folder_id=? ORDER BY uploaded_at DESC",
             (folderId,)
-        )
-        files = cursor.fetchall()
-        cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-        folder = cursor.fetchone()
-    except Exception as e:
+        ).fetchall()
+        folder = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
+    except sqlite3.Error as e:
         logging.error(f"toggleFile: {e}")
         return
 
@@ -160,7 +156,7 @@ async def confirmDeleteCallback(update: Update, context: ContextTypes.DEFAULT_TY
             markup=kbBack(f"foldermenu_{folderId}"),
             parse_mode="HTML",
         )
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"confirmDelete: {e}")
         await safeEdit(query, "Failed to delete files.", markup=kbBack(f"foldermenu_{folderId}"))
 
@@ -189,7 +185,7 @@ async def confirmDeleteAllCallback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     folderId = int(query.data.replace("confirmdeleteall_", ""))
     try:
-        cursor.execute("DELETE FROM files WHERE folder_id=%s", (folderId,))
+        cursor.execute("DELETE FROM files WHERE folder_id=?", (folderId,))
         conn.commit()
         context.user_data.clear()
         await safeEdit(
@@ -198,7 +194,7 @@ async def confirmDeleteAllCallback(update: Update, context: ContextTypes.DEFAULT
             markup=kbBack(f"foldermenu_{folderId}"),
             parse_mode="HTML",
         )
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"confirmDeleteAll: {e}")
         await safeEdit(query, "Failed to delete files.", markup=kbBack(f"foldermenu_{folderId}"))
 

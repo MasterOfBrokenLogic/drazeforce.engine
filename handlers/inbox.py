@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 import uuid
 from datetime import datetime
 
@@ -22,33 +23,23 @@ async def userMessagesCallback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         if viewerIsSuper:
-            cursor.execute("SELECT COUNT(*) FROM user_messages")
-            total = cursor.fetchone()
-            total = total[0] if total else None
-            cursor.execute("SELECT COUNT(*) FROM user_messages WHERE status='unread'")
-            unread = cursor.fetchone()
-            unread = unread[0] if unread else None
+            total  = cursor.execute("SELECT COUNT(*) FROM user_messages").fetchone()[0]
+            unread = cursor.execute("SELECT COUNT(*) FROM user_messages WHERE status='unread'").fetchone()[0]
             msgs   = cursor.execute("""
                 SELECT message_id, user_id, username, first_name, sent_at, status,
                        recipient_admin_id, recipient_is_super
                 FROM user_messages ORDER BY sent_at DESC LIMIT 20
-            """)
-            msgs = cursor.fetchall()
+            """).fetchall()
         else:
-            cursor.execute("SELECT COUNT(*) FROM user_messages WHERE recipient_admin_id=%s", (viewerId,))
-            total = cursor.fetchone()
-            total = total[0] if total else None
-            cursor.execute("SELECT COUNT(*) FROM user_messages WHERE recipient_admin_id=%s AND status='unread'", (viewerId,))
-            unread = cursor.fetchone()
-            unread = unread[0] if unread else None
+            total  = cursor.execute("SELECT COUNT(*) FROM user_messages WHERE recipient_admin_id=?", (viewerId,)).fetchone()[0]
+            unread = cursor.execute("SELECT COUNT(*) FROM user_messages WHERE recipient_admin_id=? AND status='unread'", (viewerId,)).fetchone()[0]
             msgs   = cursor.execute("""
                 SELECT message_id, user_id, username, first_name, sent_at, status,
                        recipient_admin_id, recipient_is_super
-                FROM user_messages WHERE recipient_admin_id=%s
+                FROM user_messages WHERE recipient_admin_id=?
                 ORDER BY sent_at DESC LIMIT 20
-            """, (viewerId,))
-            msgs = cursor.fetchall()
-    except Exception as e:
+            """, (viewerId,)).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"userMessages: {e}")
         await safeEdit(query, "Failed to load inbox.", markup=kbHome())
         return
@@ -62,11 +53,7 @@ async def userMessagesCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         label  = username or firstName or str(userId)
         prefix = "[New]  " if status == "unread" else ""
         if viewerIsSuper:
-            if recipId:
-                cursor.execute("SELECT username FROM admins WHERE user_id=%s", (recipId,))
-                recipRow = cursor.fetchone()
-            else:
-                recipRow = None
+            recipRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (recipId,)).fetchone() if recipId else None
             recipName = (recipRow[0] if recipRow else None) or (f"Admin {recipId}" if recipId else "Super Admin")
             label    += f"  →  {recipName}"
         buttons.append([InlineKeyboardButton(f"{prefix}{label}  |  {fmtDt(sentAt)}", callback_data=f"viewmsg_{msgId}")])
@@ -92,8 +79,7 @@ async def viewMessageCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg = cursor.execute(
             "SELECT user_id, username, first_name, sent_at, recipient_admin_id, recipient_is_super FROM user_messages WHERE message_id=?",
             (msgId,)
-        )
-        msg = cursor.fetchone()
+        ).fetchone()
         if not msg:
             await safeEdit(query, "Message not found.", markup=kbBack("user_messages"))
             return
@@ -105,36 +91,29 @@ async def viewMessageCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safeEdit(query, "<b>Access Denied</b>", markup=kbBack("user_messages"), parse_mode="HTML")
                 return
 
-        cursor.execute("SELECT file_id, file_type, text_content FROM user_message_files WHERE message_id=%s", (msgId,))
-        files = cursor.fetchall()
+        files = cursor.execute("SELECT file_id, file_type, text_content FROM user_message_files WHERE message_id=?", (msgId,)).fetchall()
 
-        cursor.execute("SELECT status FROM user_messages WHERE message_id=%s", (msgId,))
-        was_unread = cursor.fetchone()
+        was_unread    = cursor.execute("SELECT status FROM user_messages WHERE message_id=?", (msgId,)).fetchone()
         is_first_read = was_unread and was_unread[0] == "unread"
 
-        cursor.execute("UPDATE user_messages SET status='read', viewed_at=%s WHERE message_id=%s", (datetime.now().isoformat(), msgId))
+        cursor.execute("UPDATE user_messages SET status='read', viewed_at=? WHERE message_id=?", (datetime.now().isoformat(), msgId))
         conn.commit()
 
         if is_first_read:
-            cursor.execute("SELECT username FROM admins WHERE user_id=%s", (viewerId,))
-            adminRow = cursor.fetchone()
+            adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (viewerId,)).fetchone()
             adminName = (adminRow[0] if adminRow else None) or f"Admin {viewerId}"
             try:
                 await context.bot.send_message(chat_id=userId, text=f"<b>Message Seen</b>\n\n<code>{adminName}</code> has read your message.", parse_mode="HTML")
             except Exception as e:
                 logging.error(f"read receipt: {e}")
 
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"viewMessage: {e}")
         await safeEdit(query, "Failed to load message.", markup=kbBack("user_messages"))
         return
 
     sender   = username or firstName or str(userId)
-    if recipId:
-        cursor.execute("SELECT username FROM admins WHERE user_id=%s", (recipId,))
-        recipRow = cursor.fetchone()
-    else:
-        recipRow = None
+    recipRow = cursor.execute("SELECT username FROM admins WHERE user_id=?", (recipId,)).fetchone() if recipId else None
     recipName = (recipRow[0] if recipRow else None) or (f"Admin {recipId}" if recipId else "Unknown")
     if recipIsSuper:
         recipName += "  [Super Admin]"
@@ -210,11 +189,10 @@ async def userInboxCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         replies = cursor.execute("""
             SELECT reply_id, from_admin_id, content, sent_at, status
-            FROM message_replies WHERE to_user_id=%s
+            FROM message_replies WHERE to_user_id=?
             ORDER BY sent_at DESC LIMIT 20
-        """, (userId,))
-        replies = cursor.fetchall()
-    except Exception as e:
+        """, (userId,)).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"userInbox: {e}")
         await safeEdit(query, "Failed to load inbox.", markup=kbBack("user_menu"))
         return
@@ -228,8 +206,7 @@ async def userInboxCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     unread  = sum(1 for r in replies if r[4] == "unread")
     buttons = []
     for replyId, fromAdminId, content, sentAt, status in replies:
-        cursor.execute("SELECT username FROM admins WHERE user_id=%s", (fromAdminId,))
-        adminRow = cursor.fetchone()
+        adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (fromAdminId,)).fetchone()
         adminName = (adminRow[0] if adminRow else None) or f"Admin {fromAdminId}"
         prefix    = "[New]  " if status == "unread" else ""
         buttons.append([InlineKeyboardButton(f"{prefix}{adminName}  |  {fmtDt(sentAt)}", callback_data=f"viewreply_{replyId}")])
@@ -251,9 +228,8 @@ async def viewReplyCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = cursor.execute(
             "SELECT reply_id, from_admin_id, message_id, content, sent_at FROM message_replies WHERE reply_id=? AND to_user_id=?",
             (replyId, userId)
-        )
-        reply = cursor.fetchone()
-    except Exception as e:
+        ).fetchone()
+    except sqlite3.Error as e:
         logging.error(f"viewReply: {e}")
         await safeEdit(query, "Failed to load reply.", markup=kbBack("user_inbox"))
         return
@@ -263,27 +239,46 @@ async def viewReplyCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     replyId, fromAdminId, origMsgId, content, sentAt = reply
-    cursor.execute("UPDATE message_replies SET status='read' WHERE reply_id=%s", (replyId,))
+    cursor.execute("UPDATE message_replies SET status='read' WHERE reply_id=?", (replyId,))
     conn.commit()
 
-    cursor.execute("SELECT username FROM admins WHERE user_id=%s", (fromAdminId,))
-    adminRow = cursor.fetchone()
+    adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (fromAdminId,)).fetchone()
     adminName = (adminRow[0] if adminRow else None) or f"Admin {fromAdminId}"
 
-    await safeEdit(query,
-        f"<b>Reply from {adminName}</b>\n\n<code>Received  :  {fmtDt(sentAt)}</code>",
-        markup=None, parse_mode="HTML")
+    # Load reply files
+    files = cursor.execute(
+        "SELECT file_id, file_type, text_content FROM message_reply_files WHERE reply_id=?", (replyId,)
+    ).fetchall()
 
-    if content:
-        await query.message.reply_text(content)
+    await safeEdit(
+        query,
+        f"<b>Reply from {adminName}</b>\n\n<code>Received  :  {fmtDt(sentAt)}</code>",
+        markup=None, parse_mode="HTML"
+    )
+
+    # Send each piece of content
+    for fileId, fileType, textContent in files:
+        try:
+            if fileType == "text":
+                await query.message.reply_text(textContent)
+            elif fileType == "video":
+                await query.message.reply_video(fileId)
+            elif fileType == "photo":
+                await query.message.reply_photo(fileId)
+            elif fileType == "document":
+                await query.message.reply_document(fileId)
+        except Exception as e:
+            logging.error(f"viewReply send: {e}")
 
     await query.message.reply_text(
-        "<b>What would you like to do?</b>",
+        "<b>Actions</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Reply Back", callback_data=f"userreply_{origMsgId}_{fromAdminId}"),
-             InlineKeyboardButton("Delete",     callback_data=f"delreply_{replyId}")],
-            [InlineKeyboardButton("Inbox",      callback_data="user_inbox")],
+            [
+                InlineKeyboardButton("Reply Back", callback_data=f"userreply_{origMsgId}_{fromAdminId}"),
+                InlineKeyboardButton("Delete",     callback_data=f"delreply_{replyId}"),
+            ],
+            [InlineKeyboardButton("Inbox", callback_data="user_inbox")],
         ]),
     )
 
@@ -293,9 +288,9 @@ async def deleteReplyCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     replyId = query.data.replace("delreply_", "")
     try:
-        cursor.execute("DELETE FROM message_replies WHERE reply_id=%s", (replyId,))
+        cursor.execute("DELETE FROM message_replies WHERE reply_id=?", (replyId,))
         conn.commit()
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"deleteReply: {e}")
     await safeEdit(query, "<b>Deleted</b>\n\nReply removed.",
                    markup=InlineKeyboardMarkup([[InlineKeyboardButton("Inbox", callback_data="user_inbox")]]),
@@ -337,10 +332,10 @@ async def deleteMsgFromChatCallback(update: Update, context: ContextTypes.DEFAUL
         except Exception:
             pass
     try:
-        cursor.execute("DELETE FROM user_message_files WHERE message_id=%s", (msgId,))
-        cursor.execute("DELETE FROM user_messages        WHERE message_id=%s", (msgId,))
+        cursor.execute("DELETE FROM user_message_files WHERE message_id=?", (msgId,))
+        cursor.execute("DELETE FROM user_messages        WHERE message_id=?", (msgId,))
         conn.commit()
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"deleteMsgFromChat DB: {e}")
     await context.bot.send_message(chat_id=chatId, text="<b>Message Deleted</b>", parse_mode="HTML", reply_markup=kbBack("user_messages"))
 
@@ -359,7 +354,7 @@ async def markAllReadCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if isSuperAdmin(viewerId):
         cursor.execute("UPDATE user_messages SET status='read' WHERE status='unread'")
     else:
-        cursor.execute("UPDATE user_messages SET status='read' WHERE status='unread' AND recipient_admin_id=%s", (viewerId,))
+        cursor.execute("UPDATE user_messages SET status='read' WHERE status='unread' AND recipient_admin_id=?", (viewerId,))
     conn.commit()
     await safeEdit(query, "<b>All Read</b>\n\nAll messages marked as read.", markup=kbBack("user_messages"), parse_mode="HTML")
 
@@ -384,15 +379,14 @@ async def confirmClearMessagesCallback(update: Update, context: ContextTypes.DEF
             cursor.execute("DELETE FROM user_message_files")
             cursor.execute("DELETE FROM user_messages")
         else:
-            cursor.execute("SELECT message_id FROM user_messages WHERE recipient_admin_id=%s", (viewerId,))
-            ownedIds = [r[0] for r in cursor.fetchall()]
+            ownedIds = [r[0] for r in cursor.execute("SELECT message_id FROM user_messages WHERE recipient_admin_id=?", (viewerId,)).fetchall()]
             if ownedIds:
-                ph = ",".join(["%s"] * len(ownedIds))
+                ph = ",".join("?" * len(ownedIds))
                 cursor.execute(f"DELETE FROM user_message_files WHERE message_id IN ({ph})", ownedIds)
                 cursor.execute(f"DELETE FROM user_messages        WHERE message_id IN ({ph})", ownedIds)
         conn.commit()
         await safeEdit(query, "<b>Inbox Cleared</b>", markup=kbHome(), parse_mode="HTML")
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"clearMessages: {e}")
         await safeEdit(query, "Failed to clear inbox.", markup=kbHome())
 
@@ -405,9 +399,8 @@ async def contactAdminCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     try:
-        cursor.execute("SELECT user_id, username, is_super_admin FROM admins ORDER BY is_super_admin DESC, added_at ASC")
-        admins = cursor.fetchall()
-    except Exception as e:
+        admins = cursor.execute("SELECT user_id, username, is_super_admin FROM admins ORDER BY is_super_admin DESC, added_at ASC").fetchall()
+    except sqlite3.Error as e:
         logging.error(f"contactAdmin: {e}")
         await safeEdit(query, "Could not load admin list.", markup=kbBack("user_menu"))
         return
@@ -432,9 +425,8 @@ async def selectAdminToContactCallback(update: Update, context: ContextTypes.DEF
     recipientId = int(query.data.replace("contact_select_", ""))
 
     try:
-        cursor.execute("SELECT username, is_super_admin FROM admins WHERE user_id=%s", (recipientId,))
-        row = cursor.fetchone()
-    except Exception as e:
+        row = cursor.execute("SELECT username, is_super_admin FROM admins WHERE user_id=?", (recipientId,)).fetchone()
+    except sqlite3.Error as e:
         logging.error(f"selectAdminToContact: {e}")
         await safeEdit(query, "Could not find that admin.", markup=kbBack("contact_admin"))
         return

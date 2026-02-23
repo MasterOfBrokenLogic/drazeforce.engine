@@ -13,9 +13,7 @@ from handlers.polls import _broadcastPollResults
 async def jobQotd(context):
     """Runs daily — sends a random quote to all subscribers."""
     try:
-        cursor.execute("SELECT COUNT(*) FROM quotes")
-        count = cursor.fetchone()
-        count = count[0] if count else None
+        count = cursor.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
         if count == 0:
             return
         await _sendQotd(context)
@@ -35,12 +33,11 @@ async def jobClosePols(context):
             SELECT id FROM polls
             WHERE status='open'
             AND result_sent=0
-            AND closes_at <= NOW()
-        """)
-        expired = cursor.fetchall()
+            AND datetime(closes_at) <= datetime('now')
+        """).fetchall()
 
         for (pollId,) in expired:
-            cursor.execute("UPDATE polls SET status='closed' WHERE id=%s", (pollId,))
+            cursor.execute("UPDATE polls SET status='closed' WHERE id=?", (pollId,))
             conn.commit()
             await _broadcastPollResults(pollId, context)
             logging.info(f"Poll {pollId} auto-closed and results sent")
@@ -56,7 +53,7 @@ async def jobPurgeTrending(context):
     """Runs hourly — removes expired trending items."""
     try:
         cursor.execute(
-            "DELETE FROM trending WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
+            "DELETE FROM trending WHERE expires_at IS NOT NULL AND datetime(expires_at) <= datetime('now')"
         )
         removed = cursor.rowcount
         conn.commit()
@@ -73,7 +70,7 @@ async def jobPurgeTrending(context):
 async def jobPurgeLinks(context):
     """Runs daily — removes expired and revoked link records."""
     try:
-        cursor.execute("DELETE FROM links WHERE expiry <= NOW()")
+        cursor.execute("DELETE FROM links WHERE datetime(expiry) <= datetime('now')")
         exp = cursor.rowcount
         cursor.execute("DELETE FROM links WHERE revoked=1")
         rev = cursor.rowcount

@@ -9,26 +9,39 @@ from telegram.error import BadRequest  # type: ignore
 
 from config import conn, cursor
 
+# ─────────────────────────────────────────────
+#  AUTH
+# ─────────────────────────────────────────────
 
 def isAdmin(userId: int) -> bool:
-    cursor.execute("SELECT 1 FROM admins WHERE user_id=%s", (userId,))
-    return cursor.fetchone() is not None
+    return cursor.execute(
+        "SELECT 1 FROM admins WHERE user_id=?", (userId,)
+    ).fetchone() is not None
 
 
 def isSuperAdmin(userId: int) -> bool:
-    cursor.execute("SELECT is_super_admin FROM admins WHERE user_id=%s", (userId,))
-    row = cursor.fetchone()
+    row = cursor.execute(
+        "SELECT is_super_admin FROM admins WHERE user_id=?", (userId,)
+    ).fetchone()
     return bool(row and row[0])
 
 
 def isBanned(userId: int) -> bool:
-    cursor.execute("SELECT 1 FROM banned_users WHERE user_id=%s", (userId,))
-    if cursor.fetchone() is not None:
+    # Check both the banned_users table AND the subscribers.banned flag
+    in_ban_table = cursor.execute(
+        "SELECT 1 FROM banned_users WHERE user_id=?", (userId,)
+    ).fetchone() is not None
+    if in_ban_table:
         return True
-    cursor.execute("SELECT banned FROM subscribers WHERE user_id=%s", (userId,))
-    row = cursor.fetchone()
-    return bool(row and row[0])
+    sub_banned = cursor.execute(
+        "SELECT banned FROM subscribers WHERE user_id=?", (userId,)
+    ).fetchone()
+    return bool(sub_banned and sub_banned[0])
 
+
+# ─────────────────────────────────────────────
+#  GENERATORS
+# ─────────────────────────────────────────────
 
 def generateToken() -> str:
     return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
@@ -41,11 +54,16 @@ def generateBroadcastCode() -> str:
 def generateMessageId() -> str:
     return "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(16))
 
+
 def randomFolderName() -> str:
     return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
 
 
-def validateFolderName(name: str) -> tuple:
+# ─────────────────────────────────────────────
+#  VALIDATORS
+# ─────────────────────────────────────────────
+
+def validateFolderName(name: str) -> tuple[bool, str]:
     if not name or len(name) > 100:
         return False, "Folder name must be between 1 and 100 characters."
     if not re.match(r"^[\w\s\-]+$", name):
@@ -53,7 +71,7 @@ def validateFolderName(name: str) -> tuple:
     return True, ""
 
 
-def validateMinutes(value):
+def validateMinutes(value) -> tuple[bool, int | str]:
     try:
         mins = int(value)
         if mins < 1 or mins > 10080:
@@ -62,6 +80,10 @@ def validateMinutes(value):
     except (ValueError, TypeError):
         return False, "That is not a valid number."
 
+
+# ─────────────────────────────────────────────
+#  FORMATTERS
+# ─────────────────────────────────────────────
 
 def fmtSize(size) -> str:
     if size is None:
@@ -92,29 +114,35 @@ def fmtUptime(start: datetime) -> str:
     return f"{m}m {s}s"
 
 
-def fmtBool(val) -> str:
+def fmtBool(val: int | bool) -> str:
     return "Yes" if val else "No"
 
+
+# ─────────────────────────────────────────────
+#  USER TRACKING
+# ─────────────────────────────────────────────
 
 def trackUser(user) -> None:
     try:
         cursor.execute("""
-            INSERT INTO subscribers (user_id, username, first_name, subscribed_at, last_active)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                username    = EXCLUDED.username,
-                first_name  = EXCLUDED.first_name,
-                last_active = EXCLUDED.last_active
+            INSERT OR REPLACE INTO subscribers
+                (user_id, username, first_name, subscribed_at, last_active)
+            VALUES (?, ?, ?,
+                COALESCE((SELECT subscribed_at FROM subscribers WHERE user_id=?), ?),
+                ?)
         """, (
             user.id, user.username, user.first_name,
-            datetime.now().isoformat(),
+            user.id, datetime.now().isoformat(),
             datetime.now().isoformat(),
         ))
         conn.commit()
     except Exception as e:
         logging.error(f"trackUser: {e}")
-        conn.rollback()
 
+
+# ─────────────────────────────────────────────
+#  ASYNC HELPERS
+# ─────────────────────────────────────────────
 
 async def deleteLater(message, delay_seconds: int) -> None:
     await asyncio.sleep(delay_seconds)
@@ -142,3 +170,41 @@ async def safeEdit(query, text: str, markup=None, parse_mode: str = None) -> Non
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             raise
+
+
+# ─────────────────────────────────────────────
+#  DECORATORS / WRAPPERS
+# ─────────────────────────────────────────────
+
+def adminOnly(func):
+    """Decorator: blocks non-admins from callback handlers."""
+    async def wrapper(update, context, *args, **kwargs):
+        userId = update.effective_user.id
+        if not isAdmin(userId):
+            try:
+                await update.callback_query.answer(
+                    "Access denied. Admins only.", show_alert=True
+                )
+            except Exception:
+                pass
+            return
+        return await func(update, context, *args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+
+def superAdminOnly(func):
+    """Decorator: blocks non-super-admins from callback handlers."""
+    async def wrapper(update, context, *args, **kwargs):
+        userId = update.effective_user.id
+        if not isSuperAdmin(userId):
+            try:
+                await update.callback_query.answer(
+                    "Only super admins can do this.", show_alert=True
+                )
+            except Exception:
+                pass
+            return
+        return await func(update, context, *args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper

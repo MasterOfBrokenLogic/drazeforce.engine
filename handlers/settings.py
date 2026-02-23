@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -22,15 +23,11 @@ async def settingsMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     welcome = cursor.execute(
         "SELECT value FROM bot_settings WHERE key='welcome_message'"
-    )
-    welcome = cursor.fetchone()
-    cursor.execute("SELECT COUNT(*) FROM quotes")
-    quote_count = cursor.fetchone()
-    quote_count = quote_count[0] if quote_count else None
+    ).fetchone()
+    quote_count = cursor.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
     qotd_time   = cursor.execute(
         "SELECT value FROM bot_settings WHERE key='qotd_time'"
-    )
-    qotd_time = cursor.fetchone()
+    ).fetchone()
 
     await safeEdit(
         query,
@@ -58,8 +55,7 @@ async def settingsWelcomeCallback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     current = cursor.execute(
         "SELECT value FROM bot_settings WHERE key='welcome_message'"
-    )
-    current = cursor.fetchone()
+    ).fetchone()
 
     await safeEdit(
         query,
@@ -86,9 +82,8 @@ async def settingsQuotesCallback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         quotes = cursor.execute(
             "SELECT id, text, author, last_sent FROM quotes ORDER BY added_at DESC LIMIT 15"
-        )
-        quotes = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"settingsQuotes: {e}")
         await safeEdit(query, "Failed to load quotes.", markup=kbBack("settings_menu"))
         return
@@ -130,9 +125,8 @@ async def quoteDeleteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         quotes = cursor.execute(
             "SELECT id, text FROM quotes ORDER BY added_at DESC LIMIT 15"
-        )
-        quotes = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"quoteDelete: {e}")
         await safeEdit(query, "Failed to load quotes.", markup=kbBack("settings_quotes"))
         return
@@ -167,7 +161,7 @@ async def quoteDelConfirmCallback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     qid   = int(query.data.replace("quote_del_", ""))
     try:
-        cursor.execute("DELETE FROM quotes WHERE id=%s", (qid,))
+        cursor.execute("DELETE FROM quotes WHERE id=?", (qid,))
         conn.commit()
         await safeEdit(
             query,
@@ -175,7 +169,7 @@ async def quoteDelConfirmCallback(update: Update, context: ContextTypes.DEFAULT_
             markup=kbBack("settings_quotes"),
             parse_mode="HTML",
         )
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"quoteDelConfirm: {e}")
         await safeEdit(query, "Failed to delete quote.", markup=kbBack("settings_quotes"))
 
@@ -197,15 +191,13 @@ async def _sendQotd(context):
     try:
         quote = cursor.execute(
             "SELECT id, text, author FROM quotes ORDER BY RANDOM() LIMIT 1"
-        )
-        quote = cursor.fetchone()
+        ).fetchone()
         if not quote:
             return
         subs = cursor.execute(
             "SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL"
-        )
-        subs = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"sendQotd: {e}")
         return
 
@@ -225,7 +217,7 @@ async def _sendQotd(context):
             (datetime.now().isoformat(), qid)
         )
         conn.commit()
-    except Exception:
+    except sqlite3.Error:
         pass
 
 
@@ -239,9 +231,8 @@ async def settingsSecretsCallback(update: Update, context: ContextTypes.DEFAULT_
     try:
         secrets = cursor.execute(
             "SELECT id, name, secret_code FROM folders WHERE is_secret=1"
-        )
-        secrets = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"settingsSecrets: {e}")
         await safeEdit(query, "Failed to load secret folders.", markup=kbBack("settings_menu"))
         return
@@ -272,9 +263,8 @@ async def secretMakeCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         folders = cursor.execute(
             "SELECT id, name FROM folders WHERE is_secret=0 ORDER BY name"
-        )
-        folders = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"secretMake: {e}")
         await safeEdit(query, "Failed to load folders.", markup=kbBack("settings_secrets"))
         return
@@ -326,9 +316,8 @@ async def secretUnmarkCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         secrets = cursor.execute(
             "SELECT id, name FROM folders WHERE is_secret=1"
-        )
-        secrets = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"secretUnmark: {e}")
         await safeEdit(query, "Failed to load secrets.", markup=kbBack("settings_secrets"))
         return
@@ -371,7 +360,7 @@ async def secretUnmarkConfirmCallback(update: Update, context: ContextTypes.DEFA
             markup=kbBack("settings_secrets"),
             parse_mode="HTML",
         )
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"secretUnmarkConfirm: {e}")
         await safeEdit(query, "Failed to unmark folder.", markup=kbBack("settings_secrets"))
 
@@ -386,9 +375,8 @@ async def settingsLinkstatsCallback(update: Update, context: ContextTypes.DEFAUL
     try:
         folders = cursor.execute(
             "SELECT id, name FROM folders ORDER BY name"
-        )
-        folders = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"settingsLinkstats: {e}")
         await safeEdit(query, "Failed to load folders.", markup=kbBack("settings_menu"))
         return
@@ -422,8 +410,7 @@ async def linkstatsViewCallback(update: Update, context: ContextTypes.DEFAULT_TY
     folderId = int(query.data.replace("linkstats_", ""))
 
     try:
-        cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-        folder = cursor.fetchone()
+        folder = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
         links  = cursor.execute("""
             SELECT l.id, l.token, l.created_at, l.expiry, l.revoked, l.single_use,
                    l.access_count,
@@ -431,13 +418,12 @@ async def linkstatsViewCallback(update: Update, context: ContextTypes.DEFAULT_TY
                    MAX(la.accessed_at) as last_access
             FROM links l
             LEFT JOIN link_access_log la ON l.id = la.link_id
-            WHERE l.folder_id=%s
+            WHERE l.folder_id=?
             GROUP BY l.id
             ORDER BY l.created_at DESC
             LIMIT 10
-        """, (folderId,))
-        links = cursor.fetchall()
-    except Exception as e:
+        """, (folderId,)).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"linkstatsView: {e}")
         await safeEdit(query, "Failed to load link stats.", markup=kbBack("settings_linkstats"))
         return
@@ -484,9 +470,8 @@ async def getQuoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         quote = cursor.execute(
             "SELECT text, author FROM quotes ORDER BY RANDOM() LIMIT 1"
-        )
-        quote = cursor.fetchone()
-    except Exception as e:
+        ).fetchone()
+    except sqlite3.Error as e:
         logging.error(f"getQuote: {e}")
         quote = None
 

@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -61,8 +62,7 @@ async def listAdminsCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     admins = cursor.execute(
         "SELECT user_id, username, added_at, is_super_admin FROM admins ORDER BY is_super_admin DESC, added_at ASC"
-    )
-    admins = cursor.fetchall()
+    ).fetchall()
 
     buttons = []
     for userId, username, addedAt, isSuper in admins:
@@ -86,8 +86,7 @@ async def adminInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     userId = int(query.data.replace("admin_info_", ""))
     row    = cursor.execute(
         "SELECT user_id, username, added_at, is_super_admin FROM admins WHERE user_id=?", (userId,)
-    )
-    row = cursor.fetchone()
+    ).fetchone()
     if not row:
         await safeEdit(query, "Administrator not found.", markup=kbBack("list_admins"))
         return
@@ -114,8 +113,7 @@ async def removeAdminCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     admins = cursor.execute(
         "SELECT user_id, username FROM admins WHERE user_id != ? AND is_super_admin = 0", (ADMIN_ID,)
-    )
-    admins = cursor.fetchall()
+    ).fetchall()
     if not admins:
         await safeEdit(query, "No removable admins found.", markup=kbBack("admin_menu"))
         return
@@ -138,7 +136,7 @@ async def removeAdminConfirmCallback(update: Update, context: ContextTypes.DEFAU
     await query.answer()
     userId = int(query.data.replace("remove_admin_", ""))
     try:
-        cursor.execute("DELETE FROM admins WHERE user_id=%s AND is_super_admin=0", (userId,))
+        cursor.execute("DELETE FROM admins WHERE user_id=? AND is_super_admin=0", (userId,))
         conn.commit()
         await safeEdit(
             query,
@@ -158,7 +156,7 @@ async def removeAdminConfirmCallback(update: Update, context: ContextTypes.DEFAU
             )
         except Exception:
             pass
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"removeAdmin: {e}")
         await safeEdit(query, "Failed to remove administrator.", markup=kbBack("admin_menu"))
 
@@ -187,9 +185,8 @@ async def bannedListCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         bans = cursor.execute(
             "SELECT user_id, username, reason, banned_at FROM banned_users ORDER BY banned_at DESC"
-        )
-        bans = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"bannedList: {e}")
         await safeEdit(query, "Failed to load ban list.", markup=kbBack("admin_menu"))
         return
@@ -224,8 +221,7 @@ async def banInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     userId = int(query.data.replace("ban_info_", ""))
     row    = cursor.execute(
         "SELECT user_id, username, reason, banned_at FROM banned_users WHERE user_id=?", (userId,)
-    )
-    row = cursor.fetchone()
+    ).fetchone()
     if not row:
         await safeEdit(query, "Ban record not found.", markup=kbBack("banned_list"))
         return
@@ -250,7 +246,7 @@ async def unbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     userId = int(query.data.replace("unban_", ""))
     try:
-        cursor.execute("DELETE FROM banned_users WHERE user_id=%s", (userId,))
+        cursor.execute("DELETE FROM banned_users WHERE user_id=?", (userId,))
         conn.commit()
         await safeEdit(
             query,
@@ -270,6 +266,6 @@ async def unbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"unban: {e}")
         await safeEdit(query, "Failed to unban user.", markup=kbBack("banned_list"))

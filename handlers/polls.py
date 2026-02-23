@@ -1,6 +1,5 @@
-import psycopg2
-import psycopg2.errors
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
@@ -25,13 +24,9 @@ async def pollMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         active = cursor.execute(
             "SELECT COUNT(*) FROM polls WHERE status='open'"
-        )
-        active = cursor.fetchone()
-        active = active[0] if active else None
-        cursor.execute("SELECT COUNT(*) FROM polls")
-        total = cursor.fetchone()
-        total = total[0] if total else None
-    except Exception as e:
+        ).fetchone()[0]
+        total  = cursor.execute("SELECT COUNT(*) FROM polls").fetchone()[0]
+    except sqlite3.Error as e:
         logging.error(f"pollMenu: {e}")
         await safeEdit(query, "Failed to load poll data.", markup=kbHome())
         return
@@ -66,7 +61,7 @@ async def pollCreateCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         query,
         "<b>Create Poll  —  Step 1 of 6</b>\n\n"
         "Enter the poll question.\n\n"
-        "<i>Example: What type of content do you want more of%s</i>",
+        "<i>Example: What type of content do you want more of?</i>",
         markup=kbBack("poll_menu"),
         parse_mode="HTML",
     )
@@ -80,11 +75,10 @@ async def pollListCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         polls = cursor.execute(
-            "SELECT id, question, created_at, closes_at FROM polls WHERE status=%s ORDER BY created_at DESC LIMIT 10",
+            "SELECT id, question, created_at, closes_at FROM polls WHERE status=? ORDER BY created_at DESC LIMIT 10",
             (status,)
-        )
-        polls = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"pollList: {e}")
         await safeEdit(query, "Failed to load polls.", markup=kbBack("poll_menu"))
         return
@@ -120,17 +114,15 @@ async def pollViewCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         poll = cursor.execute(
             "SELECT id, question, option_a, option_b, option_c, option_d, status, closes_at, created_at "
-            "FROM polls WHERE id=%s", (pollId,)
-        )
-        poll = cursor.fetchone()
+            "FROM polls WHERE id=?", (pollId,)
+        ).fetchone()
         if not poll:
             await safeEdit(query, "Poll not found.", markup=kbBack("poll_menu"))
             return
         votes = cursor.execute(
-            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=%s GROUP BY choice", (pollId,)
-        )
-        votes = cursor.fetchall()
-    except Exception as e:
+            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=? GROUP BY choice", (pollId,)
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"pollView: {e}")
         await safeEdit(query, "Failed to load poll.", markup=kbBack("poll_menu"))
         return
@@ -177,9 +169,9 @@ async def pollCloseCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     pollId = int(query.data.replace("poll_close_", ""))
     try:
-        cursor.execute("UPDATE polls SET status='closed' WHERE id=%s", (pollId,))
+        cursor.execute("UPDATE polls SET status='closed' WHERE id=?", (pollId,))
         conn.commit()
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"pollClose: {e}")
         await safeEdit(query, "Failed to close poll.", markup=kbBack("poll_menu"))
         return
@@ -196,18 +188,15 @@ async def pollCloseCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _broadcastPollResults(pollId: int, context):
     try:
         poll = cursor.execute(
-            "SELECT question, option_a, option_b, option_c, option_d FROM polls WHERE id=%s", (pollId,)
-        )
-        poll = cursor.fetchone()
+            "SELECT question, option_a, option_b, option_c, option_d FROM polls WHERE id=?", (pollId,)
+        ).fetchone()
         votes = cursor.execute(
-            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=%s GROUP BY choice", (pollId,)
-        )
-        votes = cursor.fetchall()
+            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=? GROUP BY choice", (pollId,)
+        ).fetchall()
         subs  = cursor.execute(
             "SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL"
-        )
-        subs = cursor.fetchall()
-    except Exception as e:
+        ).fetchall()
+    except sqlite3.Error as e:
         logging.error(f"broadcastPollResults: {e}")
         return
 
@@ -240,9 +229,9 @@ async def _broadcastPollResults(pollId: int, context):
             pass
 
     try:
-        cursor.execute("UPDATE polls SET result_sent=1 WHERE id=%s", (pollId,))
+        cursor.execute("UPDATE polls SET result_sent=1 WHERE id=?", (pollId,))
         conn.commit()
-    except Exception:
+    except sqlite3.Error:
         pass
 
 
@@ -259,24 +248,22 @@ async def pollVoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         poll = cursor.execute(
-            "SELECT question, option_a, option_b, option_c, option_d, status FROM polls WHERE id=%s",
+            "SELECT question, option_a, option_b, option_c, option_d, status FROM polls WHERE id=?",
             (pollId,)
-        )
-        poll = cursor.fetchone()
+        ).fetchone()
         if not poll or poll[5] != "open":
             await query.answer("This poll is no longer active.", show_alert=True)
             return
 
         existing = cursor.execute(
-            "SELECT 1 FROM poll_votes WHERE poll_id=%s AND user_id=%s", (pollId, userId)
-        )
-        existing = cursor.fetchone()
+            "SELECT 1 FROM poll_votes WHERE poll_id=? AND user_id=?", (pollId, userId)
+        ).fetchone()
         if existing:
             await query.answer("You have already voted in this poll.", show_alert=True)
             return
 
         cursor.execute(
-            "INSERT INTO poll_votes (poll_id, user_id, choice, voted_at) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO poll_votes (poll_id, user_id, choice, voted_at) VALUES (?, ?, ?, ?)",
             (pollId, userId, choice, datetime.now().isoformat())
         )
         conn.commit()
@@ -284,9 +271,8 @@ async def pollVoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Update the vote count display for this user
         votes = cursor.execute(
-            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=%s GROUP BY choice", (pollId,)
-        )
-        votes = cursor.fetchall()
+            "SELECT choice, COUNT(*) FROM poll_votes WHERE poll_id=? GROUP BY choice", (pollId,)
+        ).fetchall()
         vote_map    = {v[0]: v[1] for v in votes}
         total_votes = sum(vote_map.values())
         question, a, b, c, d, _ = poll
@@ -308,8 +294,8 @@ async def pollVoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Thank you for voting!",
             parse_mode="HTML",
         )
-    except psycopg2.errors.UniqueViolation:
+    except sqlite3.IntegrityError:
         await query.answer("You have already voted.", show_alert=True)
-    except Exception as e:
+    except sqlite3.Error as e:
         logging.error(f"pollVote: {e}")
         await query.answer("Failed to record vote.", show_alert=True)

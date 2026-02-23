@@ -1,7 +1,6 @@
-import psycopg2
-import psycopg2.errors
 import asyncio
 import logging
+import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
@@ -38,27 +37,24 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text and not isAdmin(userId):
         try:
             secret = cursor.execute(
-                "SELECT id FROM folders WHERE is_secret=1 AND secret_code=%s", (text.strip(),)
-            )
-            secret = cursor.fetchone()
-        except Exception:
+                "SELECT id FROM folders WHERE is_secret=1 AND secret_code=?", (text.strip(),)
+            ).fetchone()
+        except sqlite3.Error:
             secret = None
         if secret:
             folderId = secret[0]
             # Check for folder password first
             folderRow = cursor.execute(
-                "SELECT password FROM folders WHERE id=%s", (folderId,)
-            )
-            folderRow = cursor.fetchone()
+                "SELECT password FROM folders WHERE id=?", (folderId,)
+            ).fetchone()
             folderPassword = folderRow[0] if folderRow else None
 
             # Find an active link
             link = cursor.execute("""
                 SELECT token FROM links
-                WHERE folder_id=%s AND revoked=0 AND expiry > NOW()
+                WHERE folder_id=? AND revoked=0 AND datetime(expiry) > datetime('now')
                 ORDER BY created_at DESC LIMIT 1
-            """, (folderId,))
-            link = cursor.fetchone()
+            """, (folderId,)).fetchone()
 
             if not link:
                 await update.message.reply_text(
@@ -107,9 +103,8 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     from config import ADMIN_ID as SA_ID
                     brow = cursor.execute(
-                        "SELECT created_by FROM broadcasts WHERE broadcast_code=%s", (code,)
-                    )
-                    brow = cursor.fetchone()
+                        "SELECT created_by FROM broadcasts WHERE broadcast_code=?", (code,)
+                    ).fetchone()
                     notify_id = brow[0] if brow else SA_ID
                     await context.bot.send_message(
                         chat_id=notify_id,
@@ -132,18 +127,16 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         try:
             row = cursor.execute(
-                "SELECT id, expiry_minutes, forwardable FROM broadcasts WHERE broadcast_code=%s", (code,)
-            )
-            row = cursor.fetchone()
+                "SELECT id, expiry_minutes, forwardable FROM broadcasts WHERE broadcast_code=?", (code,)
+            ).fetchone()
             if not row:
                 await update.message.reply_text("Broadcast not found.")
                 return
             bId, expMin, fwd = row
             files = cursor.execute(
-                "SELECT file_id, file_type, text_content FROM broadcast_files WHERE broadcast_id=%s", (bId,)
-            )
-            files = cursor.fetchall()
-        except Exception as e:
+                "SELECT file_id, file_type, text_content FROM broadcast_files WHERE broadcast_id=?", (bId,)
+            ).fetchall()
+        except sqlite3.Error as e:
             logging.error(f"broadcast verify: {e}")
             await update.message.reply_text("A database error occurred.")
             return
@@ -207,7 +200,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("""
                     INSERT INTO user_messages
                         (user_id, username, first_name, message_id, sent_at, recipient_admin_id, recipient_is_super)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     userId, user.username, user.first_name,
                     msgId, datetime.now().isoformat(),
@@ -216,10 +209,10 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for fd in contactFiles:
                     cursor.execute("""
                         INSERT INTO user_message_files (message_id, file_id, file_type, text_content)
-                        VALUES (%s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?)
                     """, (msgId, fd.get("file_id"), fd.get("file_type"), fd.get("text_content")))
                 conn.commit()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error(f"contact admin DB: {e}")
                 await update.message.reply_text("Failed to send message.", reply_markup=kbUser())
                 return
@@ -333,17 +326,16 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Save reply to DB
             replyId   = str(uuid.uuid4())[:12]
             adminId   = userId
-            cursor.execute("SELECT username FROM admins WHERE user_id=%s", (adminId,))
-            adminRow = cursor.fetchone()
+            adminRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (adminId,)).fetchone()
             adminName = (adminRow[0] if adminRow else None) or f"Admin {adminId}"
             combined  = " | ".join(f["text_content"] for f in replyFiles if f.get("text_content")) or None
             try:
                 cursor.execute("""
                     INSERT INTO message_replies (reply_id, message_id, from_admin_id, to_user_id, content, sent_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, (replyId, msgId, adminId, toUserId, combined, datetime.now().isoformat()))
                 conn.commit()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error(f"save reply: {e}")
                 await update.message.reply_text("Failed to save reply.", reply_markup=kbHome())
                 context.user_data.clear()
@@ -434,7 +426,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         elif text:
             cursor.execute(
-                "INSERT INTO bot_settings (key, value) VALUES ('welcome_message', %s)", (text,)
+                "INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('welcome_message', ?)", (text,)
             )
             conn.commit()
             await update.message.reply_text(
@@ -449,7 +441,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         if text:
             cursor.execute(
-                "INSERT INTO quotes (text, added_by, added_at) VALUES (%s, %s, %s)",
+                "INSERT INTO quotes (text, added_by, added_at) VALUES (?, ?, ?)",
                 (text, userId, datetime.now().isoformat())
             )
             conn.commit()
@@ -466,7 +458,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         if text:
             cursor.execute(
-                "UPDATE folders SET is_secret=1, secret_code=%s WHERE id=%s", (text.strip(), folderId)
+                "UPDATE folders SET is_secret=1, secret_code=? WHERE id=?", (text.strip(), folderId)
             )
             conn.commit()
             await update.message.reply_text(
@@ -482,16 +474,15 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_trending_label"):
         folderId = context.user_data.get("trending_folder_id")
         context.user_data.clear()
-        cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-        folder = cursor.fetchone()
+        folder   = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()
         label    = folder[0] if (not text or text.upper() == "SKIP") else text
         expires  = (datetime.now() + timedelta(hours=24)).isoformat()
         try:
             # Remove existing entry for this folder if any
-            cursor.execute("DELETE FROM trending WHERE folder_id=%s", (folderId,))
+            cursor.execute("DELETE FROM trending WHERE folder_id=?", (folderId,))
             cursor.execute("""
                 INSERT INTO trending (folder_id, label, added_by, added_at, expires_at, sort_order)
-                VALUES (%s, %s, %s, %s, %s, 0)
+                VALUES (?, ?, ?, ?, ?, 0)
             """, (folderId, label, userId, datetime.now().isoformat(), expires))
             conn.commit()
             await update.message.reply_text(
@@ -501,7 +492,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=kbBack("trending_menu"),
             )
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"trending label save: {e}")
             await update.message.reply_text("Failed to add to trending.", reply_markup=kbHome())
         return
@@ -548,7 +539,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("""
                     INSERT INTO polls (question, option_a, option_b, option_c, option_d,
                                        created_by, created_at, closes_at, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
                 """, (
                     poll_data.get("question"),
                     poll_data.get("option_a"),
@@ -559,9 +550,9 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     datetime.now().isoformat(),
                     closes_at,
                 ))
-                pollId = cursor.fetchone()[0]
+                pollId = cursor.lastrowid
                 conn.commit()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error(f"poll save: {e}")
                 await update.message.reply_text("Failed to create poll.", reply_markup=kbHome())
                 context.user_data.clear()
@@ -596,8 +587,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             subs = cursor.execute(
                 "SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL"
-            )
-            subs = cursor.fetchall()
+            ).fetchall()
             sent = 0
             for (uid,) in subs:
                 try:
@@ -625,7 +615,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         folderId = context.user_data.get("set_password_folder_id")
         try:
-            cursor.execute("UPDATE folders SET password=%s WHERE id=%s", (text, folderId))
+            cursor.execute("UPDATE folders SET password=? WHERE id=?", (text, folderId))
             conn.commit()
             context.user_data.clear()
             await update.message.reply_text(
@@ -633,7 +623,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=kbBack(f"foldermenu_{folderId}"),
             )
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"setPassword: {e}")
             await update.message.reply_text("Failed to set password.", reply_markup=kbHome())
         return
@@ -647,12 +637,11 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            cursor.execute("SELECT username FROM subscribers WHERE user_id=%s", (targetId,))
-            row = cursor.fetchone()
+            row      = cursor.execute("SELECT username FROM subscribers WHERE user_id=?", (targetId,)).fetchone()
             username = row[0] if row else None
             cursor.execute("""
-                INSERT INTO banned_users (user_id, username, reason, banned_at, banned_by)
-                VALUES (%s, %s, 'Banned via admin panel', %s, %s)
+                INSERT OR REPLACE INTO banned_users (user_id, username, reason, banned_at, banned_by)
+                VALUES (?, ?, 'Banned via admin panel', ?, ?)
             """, (targetId, username, datetime.now().isoformat(), userId))
             conn.commit()
             context.user_data.clear()
@@ -672,7 +661,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception:
                 pass
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"banUser: {e}")
             await update.message.reply_text("Failed to ban user.", reply_markup=kbBack("admin_menu"))
         return
@@ -699,7 +688,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             cursor.execute("""
                 INSERT INTO admins (user_id, username, added_by, added_at, is_super_admin)
-                VALUES (%s, %s, %s, %s, 0)
+                VALUES (?, ?, ?, ?, 0)
             """, (newId, newUsername, userId, datetime.now().isoformat()))
             conn.commit()
             context.user_data.clear()
@@ -725,13 +714,13 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logging.error(f"promote notify: {e}")
-        except psycopg2.errors.UniqueViolation:
+        except sqlite3.IntegrityError:
             await update.message.reply_text(
                 "<b>Already an Admin</b>\n\nThis user already has admin access.",
                 parse_mode="HTML",
                 reply_markup=kbBack("admin_menu"),
             )
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"addAdmin: {e}")
             await update.message.reply_text("Failed to add administrator.", reply_markup=kbBack("admin_menu"))
         return
@@ -753,18 +742,18 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         try:
             cursor.execute(
-                "INSERT INTO folders (name, created_at) VALUES (%s, %s)",
+                "INSERT INTO folders (name, created_at) VALUES (?, ?)",
                 (folderName, datetime.now().isoformat())
             )
             conn.commit()
-        except psycopg2.errors.UniqueViolation:
+        except sqlite3.IntegrityError:
             await update.message.reply_text(
                 "<b>Name Taken</b>\n\nA folder with that name already exists.",
                 parse_mode="HTML",
                 reply_markup=kbHome(),
             )
             return
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"createFolder: {e}")
             await update.message.reply_text("Database error.", reply_markup=kbHome())
             return
@@ -786,7 +775,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         folderId = context.user_data.get("note_folder_id")
         context.user_data.clear()
         if text and text.upper() == "CLEAR":
-            cursor.execute("UPDATE folders SET note=NULL WHERE id=%s", (folderId,))
+            cursor.execute("UPDATE folders SET note=NULL WHERE id=?", (folderId,))
             conn.commit()
             await update.message.reply_text(
                 "<b>Note Removed</b>",
@@ -794,7 +783,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kbBack(f"foldermenu_{folderId}"),
             )
         else:
-            cursor.execute("UPDATE folders SET note=%s WHERE id=%s", (text, folderId))
+            cursor.execute("UPDATE folders SET note=? WHERE id=?", (text, folderId))
             conn.commit()
             await update.message.reply_text(
                 "<b>Note Saved</b>",
@@ -812,11 +801,10 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 SELECT f.id, f.name, COUNT(fi.id)
                 FROM folders f
                 LEFT JOIN files fi ON f.id = fi.folder_id
-                WHERE f.name LIKE %s
+                WHERE f.name LIKE ?
                 GROUP BY f.id ORDER BY f.created_at DESC
-            """, (f"%{keyword}%",))
-            results = cursor.fetchall()
-        except Exception:
+            """, (f"%{keyword}%",)).fetchall()
+        except sqlite3.Error:
             await update.message.reply_text("Search failed.", reply_markup=kbHome())
             return
 
@@ -848,13 +836,10 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         try:
             files      = cursor.execute(
-                "SELECT file_id, file_type, text_content FROM files WHERE folder_id=%s", (folderId,)
-            )
-            files = cursor.fetchall()
-            cursor.execute("SELECT name FROM folders WHERE id=%s", (folderId,))
-            folderName = cursor.fetchone()
-            folderName = folderName[0] if folderName else None
-        except Exception:
+                "SELECT file_id, file_type, text_content FROM files WHERE folder_id=?", (folderId,)
+            ).fetchall()
+            folderName = cursor.execute("SELECT name FROM folders WHERE id=?", (folderId,)).fetchone()[0]
+        except sqlite3.Error:
             await update.message.reply_text("Database error.", reply_markup=kbHome())
             return
         if not files:
@@ -910,18 +895,18 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             autoDelete  = result
             try:
                 cursor.execute(
-                    "UPDATE folders SET forwardable=%s, auto_delete_minutes=%s WHERE id=%s",
+                    "UPDATE folders SET forwardable=?, auto_delete_minutes=? WHERE id=?",
                     (forwardable, autoDelete if autoDelete else None, folderId)
                 )
                 token  = generateToken()
                 expiry = (datetime.now() + timedelta(days=7)).isoformat()
                 cursor.execute(
-                    "INSERT INTO links (folder_id, token, expiry, created_at, single_use) VALUES (%s, %s, %s, %s, %s)",
+                    "INSERT INTO links (folder_id, token, expiry, created_at, single_use) VALUES (?, ?, ?, ?, ?)",
                     (folderId, token, expiry, datetime.now().isoformat(), 1)
                 )
                 conn.commit()
                 botName = context.bot.username
-                linkUrl = f"https://t.me/{botName}%sstart={token}"
+                linkUrl = f"https://t.me/{botName}?start={token}"
                 context.user_data.clear()
                 await update.message.reply_text(
                     f"<b>Single-Use Link Generated</b>\n\n"
@@ -932,14 +917,14 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML",
                     reply_markup=kbHome(),
                 )
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error(f"singleUseLink: {e}")
                 await update.message.reply_text("Failed to generate link.", reply_markup=kbHome())
         else:
             context.user_data["link_step"] = "expiry"
             await update.message.reply_text(
                 "<b>Link Expiry</b>\n\n"
-                "How many minutes should the link remain valid%s\n\n"
+                "How many minutes should the link remain valid?\n\n"
                 "Enter a number between 1 and 10080:",
                 parse_mode="HTML",
             )
@@ -969,18 +954,18 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         try:
             cursor.execute(
-                "UPDATE folders SET forwardable=%s, auto_delete_minutes=%s WHERE id=%s",
+                "UPDATE folders SET forwardable=?, auto_delete_minutes=? WHERE id=?",
                 (forwardable, autoDelete if autoDelete else None, folderId)
             )
             token  = generateToken()
             expiry = (datetime.now() + timedelta(minutes=expiryMins)).isoformat()
             cursor.execute(
-                "INSERT INTO links (folder_id, token, expiry, created_at, single_use) VALUES (%s, %s, %s, %s, %s)",
+                "INSERT INTO links (folder_id, token, expiry, created_at, single_use) VALUES (?, ?, ?, ?, ?)",
                 (folderId, token, expiry, datetime.now().isoformat(), singleUse)
             )
             conn.commit()
             botName = context.bot.username
-            linkUrl = f"https://t.me/{botName}%sstart={token}"
+            linkUrl = f"https://t.me/{botName}?start={token}"
             context.user_data.clear()
             await update.message.reply_text(
                 f"<b>Link Generated</b>\n\n"
@@ -992,7 +977,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=kbHome(),
             )
-        except Exception as e:
+        except sqlite3.Error as e:
             logging.error(f"linkExpiry: {e}")
             await update.message.reply_text("Failed to generate link.", reply_markup=kbHome())
         return
@@ -1006,7 +991,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["broadcast_step"]     = "expiry"
         await update.message.reply_text(
             "<b>Auto-Delete</b>\n\n"
-            "Should the broadcast content auto-delete after being received%s",
+            "Should the broadcast content auto-delete after being received?",
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Yes", callback_data="broadcast_exp_yes"),
@@ -1029,7 +1014,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["broadcast_step"]   = "forwardable"
         await update.message.reply_text(
             "<b>Forward Permission</b>\n\n"
-            "Should recipients be allowed to forward the broadcast content%s",
+            "Should recipients be allowed to forward the broadcast content?",
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Allow", callback_data="broadcast_fwd_yes"),
@@ -1054,7 +1039,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["broadcast_step"] = "password"
             await update.message.reply_text(
                 f"<b>{cnt} item(s) ready</b>\n\n"
-                "Should this broadcast require a password%s",
+                "Should this broadcast require a password?",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [
@@ -1091,18 +1076,119 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("upload_mode"):
         folderName = context.user_data["upload_mode"]
         if text and text.upper() == "END":
-            count    = context.user_data.get("file_count", 0)
-            cursor.execute("SELECT id FROM folders WHERE name=%s", (folderName,))
-            folderId = cursor.fetchone()
-            folderId = folderId[0] if folderId else None
+            count      = context.user_data.get("file_count", 0)
+            type_tally = context.user_data.get("upload_type_tally", {})
+            total_size = context.user_data.get("upload_total_size", 0)
+            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
+            try:
+                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
+            except Exception:
+                folderId = None
             context.user_data.clear()
+
+            from helpers import fmtSize, fmtDt
+            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
+            type_lines = ""
+            for k in ("video", "photo", "document", "text"):
+                n = type_tally.get(k, 0)
+                if n:
+                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
+
+            summary = (
+                f"<b>Upload Complete</b>\n"
+                f"<code>{'─' * 28}</code>\n\n"
+                f"<b>Folder</b>\n"
+                f"<code>  Name         {folderName}</code>\n"
+                f"<code>  Total files  {count}</code>\n"
+                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
+                f"<b>Breakdown</b>"
+                f"{type_lines}\n\n"
+                f"<b>Session</b>\n"
+                f"<code>  Started      {fmtDt(started_at)}</code>\n"
+                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
+            )
+            buttons = []
+            if folderId:
+                buttons.append([InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")])
+                buttons.append([InlineKeyboardButton("View Folder",   callback_data=f"foldermenu_{folderId}")])
+            buttons.append([InlineKeyboardButton("Main Menu", callback_data="back_main")])
+            await update.message.reply_text(summary, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+
+        fid, ftype, fsize, txt = None, None, None, None
+        if update.message.video:
+            fid, ftype, fsize = update.message.video.file_id, "video", update.message.video.file_size
+        elif update.message.photo:
+            fid, ftype, fsize = update.message.photo[-1].file_id, "photo", update.message.photo[-1].file_size
+        elif update.message.document:
+            fid, ftype, fsize = update.message.document.file_id, "document", update.message.document.file_size
+        elif text:
+            ftype, txt, fsize = "text", text, len(text.encode())
+        if ftype:
+            try:
+                folderId = cursor.execute("SELECT id FROM folders WHERE name=?", (folderName,)).fetchone()[0]
+                cursor.execute(
+                    "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
+                )
+                conn.commit()
+                context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
+                tally = context.user_data.setdefault("upload_type_tally", {})
+                tally[ftype] = tally.get(ftype, 0) + 1
+                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
+                if "upload_started_at" not in context.user_data:
+                    context.user_data["upload_started_at"] = datetime.now().isoformat()
+                cnt = context.user_data["file_count"]
+                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
+                await update.message.reply_text(
+                    f"<b>{lbl}</b>  <i>saved</i>\n"
+                    f"<code>Total  :  {cnt} file(s)</code>",
+                    parse_mode="HTML",
+                )
+            except sqlite3.Error as e:
+                logging.error(f"upload: {e}")
+                await update.message.reply_text("Failed to save file.", reply_markup=kbHome())
+        return
+
+    # ── Add media mode (existing folder) ─────────────────────────────────
+    if context.user_data.get("add_media_mode"):
+        folderName = context.user_data["add_media_mode"]
+        folderId   = context.user_data["add_media_folder_id"]
+        if text and text.upper() == "END":
+            count      = context.user_data.get("file_count", 0)
+            type_tally = context.user_data.get("upload_type_tally", {})
+            total_size = context.user_data.get("upload_total_size", 0)
+            started_at = context.user_data.get("upload_started_at", datetime.now().isoformat())
+            context.user_data.clear()
+
+            from helpers import fmtSize, fmtDt
+            type_label_map = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}
+            type_lines = ""
+            for k in ("video", "photo", "document", "text"):
+                n = type_tally.get(k, 0)
+                if n:
+                    type_lines += f"\n<code>  {type_label_map[k]:<12}  {n}</code>"
+
+            summary = (
+                f"<b>Upload Complete</b>\n"
+                f"<code>{'─' * 28}</code>\n\n"
+                f"<b>Folder</b>\n"
+                f"<code>  Name         {folderName}</code>\n"
+                f"<code>  Total files  {count}</code>\n"
+                f"<code>  Total size   {fmtSize(total_size)}</code>\n\n"
+                f"<b>Breakdown</b>"
+                f"{type_lines}\n\n"
+                f"<b>Session</b>\n"
+                f"<code>  Started      {fmtDt(started_at)}</code>\n"
+                f"<code>  Finished     {fmtDt(datetime.now().isoformat())}</code>"
+            )
             await update.message.reply_text(
-                f"<b>Upload Complete</b>\n\n"
-                f"<code>{folderName}</code>  |  {count} file(s) added",
+                summary,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Generate Link", callback_data=f"link_{folderId}")],
-                    [InlineKeyboardButton("Main Menu",    callback_data="back_main")],
+                    [InlineKeyboardButton("View Folder", callback_data=f"foldermenu_{folderId}")],
+                    [InlineKeyboardButton("Main Menu",   callback_data="back_main")],
                 ]),
             )
             return
@@ -1118,60 +1204,26 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ftype, txt, fsize = "text", text, len(text.encode())
         if ftype:
             try:
-                cursor.execute("SELECT id FROM folders WHERE name=%s", (folderName,))
-                folderId = cursor.fetchone()
-                folderId = folderId[0] if folderId else None
                 cursor.execute(
                     "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
-                )
-                conn.commit()
-                context.user_data["file_count"] += 1
-                await update.message.reply_text(
-                    f"<b>{ftype.upper()} saved</b>  |  Total: {context.user_data['file_count']}"
-                )
-            except Exception as e:
-                logging.error(f"upload: {e}")
-                await update.message.reply_text("Failed to save file.", reply_markup=kbHome())
-        return
-
-    # ── Add media mode (existing folder) ─────────────────────────────────
-    if context.user_data.get("add_media_mode"):
-        folderName = context.user_data["add_media_mode"]
-        folderId   = context.user_data["add_media_folder_id"]
-        if text and text.upper() == "DONE":
-            count = context.user_data.get("file_count", 0)
-            context.user_data.clear()
-            await update.message.reply_text(
-                f"<b>Done</b>\n\n{count} file(s) added to <code>{folderName}</code>.",
-                parse_mode="HTML",
-                reply_markup=kbBack(f"foldermenu_{folderId}"),
-            )
-            return
-
-        fid, ftype, fsize, txt = None, None, None, None
-        if update.message.video:
-            fid, ftype, fsize = update.message.video.file_id, "video", update.message.video.file_size
-        elif update.message.photo:
-            fid, ftype, fsize = update.message.photo[-1].file_id, "photo", update.message.photo[-1].file_size
-        elif update.message.document:
-            fid, ftype, fsize = update.message.document.file_id, "document", update.message.document.file_size
-        elif text:
-            ftype, txt, fsize = "text", text, len(text.encode())
-        if ftype:
-            try:
-                cursor.execute(
-                    "INSERT INTO files (folder_id, file_id, file_type, file_size, uploaded_at, text_content) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (folderId, fid, ftype, fsize, datetime.now().isoformat(), txt)
                 )
                 conn.commit()
                 context.user_data["file_count"] = context.user_data.get("file_count", 0) + 1
+                tally = context.user_data.setdefault("upload_type_tally", {})
+                tally[ftype] = tally.get(ftype, 0) + 1
+                context.user_data["upload_total_size"] = context.user_data.get("upload_total_size", 0) + (fsize or 0)
+                if "upload_started_at" not in context.user_data:
+                    context.user_data["upload_started_at"] = datetime.now().isoformat()
+                cnt = context.user_data["file_count"]
+                lbl = {"video": "Video", "photo": "Photo", "document": "Document", "text": "Text"}.get(ftype, ftype.upper())
                 await update.message.reply_text(
-                    f"<b>{ftype.upper()} added</b>  |  Total: {context.user_data['file_count']}"
+                    f"<b>{lbl}</b>  <i>saved</i>\n"
+                    f"<code>Total  :  {cnt} file(s)</code>",
+                    parse_mode="HTML",
                 )
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error(f"addMedia: {e}")
                 await update.message.reply_text("Failed to add file.", reply_markup=kbBack(f"foldermenu_{folderId}"))
         return
