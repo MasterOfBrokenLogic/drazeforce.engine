@@ -131,17 +131,17 @@ def fmtBool(val: int | bool) -> str:
 
 def trackUser(user) -> None:
     try:
+        now = datetime.now().isoformat()
         cursor.execute("""
-            INSERT OR REPLACE INTO subscribers
+            INSERT OR IGNORE INTO subscribers
                 (user_id, username, first_name, subscribed_at, last_active)
-            VALUES (?, ?, ?,
-                COALESCE((SELECT subscribed_at FROM subscribers WHERE user_id=?), ?),
-                ?)
-        """, (
-            user.id, user.username, user.first_name,
-            user.id, datetime.now().isoformat(),
-            datetime.now().isoformat(),
-        ))
+            VALUES (?, ?, ?, ?, ?)
+        """, (user.id, user.username, user.first_name, now, now))
+        cursor.execute("""
+            UPDATE subscribers
+               SET username = ?, first_name = ?, last_active = ?
+             WHERE user_id = ?
+        """, (user.username, user.first_name, now, user.id))
         conn.commit()
     except Exception as e:
         logging.error(f"trackUser: {e}")
