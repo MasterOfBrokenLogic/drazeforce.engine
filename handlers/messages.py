@@ -609,7 +609,7 @@ async def messageHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
             # Build vote buttons
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup #type: ignore
             opts    = [(k, poll_data.get(k)) for k in ("option_a","option_b","option_c","option_d")]
             buttons = []
             row     = []

@@ -38,7 +38,10 @@ logging.basicConfig(
 # Always use absolute path — prevents creating different bot.db files
 # depending on what directory the bot is launched from
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH   = os.path.join(_BASE_DIR, "bot.db")
+DB_PATH   = os.environ.get("DB_PATH", "/data/bot.db")
+
+# Ensure the data directory exists (Railway volume or local fallback)
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 
