@@ -48,7 +48,10 @@ from handlers.inbox import (
     deleteReplyCallback, userReplyBackCallback,
 )
 from handlers.analytics import statsCallback, activityCallback, botStatusCallback
-from handlers.subscribers import subscribersCallback, subInfoCallback
+from handlers.subscribers import (
+    subscribersCallback, subInfoCallback,
+    subVerifiedListCallback, subUnverifiedListCallback, subRevokeVerifyCallback,
+)
 from handlers.commands import (
     cmdHelp, cmdStats, cmdCancel, cmdSearch, cmdQuota,
     cmdPurge, cmdExport, cmdStatus, cmdPin, cmdBroadcast,
@@ -202,8 +205,11 @@ def main():
     app.add_handler(CallbackQueryHandler(botStatusCallback, pattern="^bot_status$"))
 
     # Subscribers
-    app.add_handler(CallbackQueryHandler(subscribersCallback, pattern="^subscribers$"))
-    app.add_handler(CallbackQueryHandler(subInfoCallback,     pattern="^sub_info_\\d+$"))
+    app.add_handler(CallbackQueryHandler(subscribersCallback,       pattern="^subscribers$"))
+    app.add_handler(CallbackQueryHandler(subInfoCallback,           pattern="^sub_info_\\d+$"))
+    app.add_handler(CallbackQueryHandler(subVerifiedListCallback,   pattern="^sub_verified_list$"))
+    app.add_handler(CallbackQueryHandler(subUnverifiedListCallback, pattern="^sub_unverified_list$"))
+    app.add_handler(CallbackQueryHandler(subRevokeVerifyCallback,   pattern="^sub_revoke_\\d+$"))
 
     # Inbox
     app.add_handler(CallbackQueryHandler(userMessagesCallback,         pattern="^user_messages$"))
