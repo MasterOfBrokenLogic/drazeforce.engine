@@ -3,7 +3,7 @@ import logging
 import sqlite3
 from datetime import datetime
 
-from telegram import Update  # type: ignore
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
 from telegram.ext import ContextTypes  # type: ignore
 
 from config import conn, cursor, ADMIN_ID
