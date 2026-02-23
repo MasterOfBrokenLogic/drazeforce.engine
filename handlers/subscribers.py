@@ -53,15 +53,16 @@ async def subInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     userId = int(query.data.replace("sub_info_", ""))
     row    = cursor.execute(
-        "SELECT user_id, username, first_name, subscribed_at, last_active, banned FROM subscribers WHERE user_id=?",
+        "SELECT user_id, username, first_name, subscribed_at, last_active, banned, phone_verified, phone_number FROM subscribers WHERE user_id=?",
         (userId,)
     ).fetchone()
     if not row:
         await safeEdit(query, "Subscriber not found.", markup=kbBack("subscribers"))
         return
 
-    uid, username, firstName, subAt, lastActive, isBanned = row
+    uid, username, firstName, subAt, lastActive, isBanned, phoneVerified, phoneNumber = row
     statusLabel = "Banned" if isBanned else "Active"
+    verifiedLabel = "Yes" if phoneVerified else "No"
 
     ban_buttons = []
     if isBanned:
@@ -76,6 +77,8 @@ async def subInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>Username    :  {'@' + username if username else 'N/A'}</code>\n"
         f"<code>User ID     :  {uid}</code>\n"
         f"<code>Status      :  {statusLabel}</code>\n"
+        f"<code>Verified    :  {verifiedLabel}</code>\n"
+        f"<code>Phone       :  {phoneNumber or 'N/A'}</code>\n"
         f"<code>Joined      :  {fmtDt(subAt)}</code>\n"
         f"<code>Last active :  {fmtDt(lastActive)}</code>",
         markup=InlineKeyboardMarkup([

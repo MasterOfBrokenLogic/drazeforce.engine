@@ -39,6 +39,13 @@ def isBanned(userId: int) -> bool:
     return bool(sub_banned and sub_banned[0])
 
 
+def isVerified(userId: int) -> bool:
+    row = cursor.execute(
+        "SELECT phone_verified FROM subscribers WHERE user_id=?", (userId,)
+    ).fetchone()
+    return bool(row and row[0])
+
+
 # ─────────────────────────────────────────────
 #  GENERATORS
 # ─────────────────────────────────────────────

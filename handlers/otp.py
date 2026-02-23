@@ -144,11 +144,17 @@ async def sendOtpRequestScreen(update, context, folderId: int, folderName: str):
 
 async def otpRequestCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """User taps Request OTP — bot pings SA with Generate OTP button."""
-    query    = update.callback_query
+    query  = update.callback_query
+    user   = query.from_user
+
+    from helpers import isVerified
+    if not isVerified(user.id):
+        await query.answer("Verify your phone number first to request OTP access.", show_alert=True)
+        return
+
     await query.answer("Request sent to admin.", show_alert=False)
 
     folderId = int(query.data.replace("otp_request_", ""))
-    user     = query.from_user
 
     try:
         folderName = cursor.execute(
@@ -345,7 +351,7 @@ async def verifyOtpEntry(update, context, text: str) -> bool:
         conn.commit()
         await update.message.reply_text(
             "<b>OTP Expired</b>\n\n"
-            "This OTP is no longer valid!\n"
+            "This OTP is no longer valid.\n"
             "Please request a new one from the admin.",
             parse_mode="HTML",
         )

@@ -353,8 +353,10 @@ conn.commit()
 
 # ── v4.0 folder column migrations ──
 _v4_folder_migrations = [
-    ("folders", "otp_required",       "INTEGER", "0"),
-    ("folders", "otp_expiry_minutes", "INTEGER", "NULL"),
+    ("folders",     "otp_required",       "INTEGER", "0"),
+    ("folders",     "otp_expiry_minutes", "INTEGER", "NULL"),
+    ("subscribers", "phone_verified",     "INTEGER", "0"),
+    ("subscribers", "phone_number",       "TEXT",    "NULL"),
 ]
 for _tbl, _col, _type, _default in _v4_folder_migrations:
     try:

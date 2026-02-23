@@ -242,6 +242,12 @@ async def _broadcastPollResults(pollId: int, context):
 async def pollVoteCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     userId  = query.from_user.id
+
+    from helpers import isVerified
+    if not isVerified(userId):
+        await query.answer("Verify your phone number first to vote on polls.", show_alert=True)
+        return
+
     parts   = query.data.split("_")   # vote_POLLID_CHOICE
     pollId  = int(parts[1])
     choice  = parts[2]

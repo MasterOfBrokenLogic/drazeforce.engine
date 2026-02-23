@@ -14,7 +14,7 @@ from telegram.ext import (  # type: ignore
 
 from config import TOKEN
 
-from handlers.start import start, backMainCallback, userMenuCallback, cancelDeliveryCallback
+from handlers.start import start, backMainCallback, userMenuCallback, cancelDeliveryCallback, contactHandler
 from handlers.admin import (
     adminMenuCallback, addAdminCallback, listAdminsCallback, adminInfoCallback,
     removeAdminCallback, removeAdminConfirmCallback,
@@ -279,6 +279,9 @@ def main():
     app.add_handler(CallbackQueryHandler(secretUnmarkConfirmCallback, pattern="^secret_unmark_\\d+$"))
     app.add_handler(CallbackQueryHandler(settingsLinkstatsCallback,   pattern="^settings_linkstats$"))
     app.add_handler(CallbackQueryHandler(linkstatsViewCallback,       pattern="^linkstats_\\d+$"))
+
+    # Phone verification
+    app.add_handler(MessageHandler(filters.CONTACT, contactHandler))
 
     # Message handler
     app.add_handler(MessageHandler(

@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type:
 from telegram.ext import ContextTypes  # type: ignore
 
 from config import conn, cursor, ADMIN_ID
-from helpers import isAdmin, isSuperAdmin, isBanned, trackUser, deleteAll, fmtDt
+from helpers import isAdmin, isSuperAdmin, isBanned, isVerified, trackUser, deleteAll, fmtDt
 from keyboards import kbMain, kbUser, kbHome
 
 
@@ -48,6 +48,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kbMain(),
         )
     else:
+        # Show verification prompt if not verified
+        if not isVerified(userId):
+            from telegram import KeyboardButton, ReplyKeyboardMarkup # type: ignore
+            await update.message.reply_text(
+                f"<b>Welcome, {user.first_name}</b>\n\n"
+                "Before you continue, please verify your phone number.\n"
+                "Tap the button below to share it securely via Telegram.\n\n"
+                "<i>Your number is only used for verification and is never shared.</i>",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("Share Phone Number", request_contact=True)]],
+                    resize_keyboard=True,
+                    one_time_keyboard=True,
+                ),
+            )
+            return
         # Check for custom welcome message
         custom = cursor.execute(
             "SELECT value FROM bot_settings WHERE key='welcome_message'"
@@ -78,6 +94,21 @@ async def _handleToken(update, context, token, user):
             "<b>Access Denied</b>\n\n"
             "Your account is restricted. You cannot use access links.",
             parse_mode="HTML",
+        )
+        return
+
+    if not isAdmin(userId) and not isVerified(userId):
+        from telegram import KeyboardButton, ReplyKeyboardMarkup # type: ignore
+        await update.message.reply_text(
+            "<b>Verification Required</b>\n\n"
+            "You need to verify your phone number before opening folder links.\n\n"
+            "Tap the button below to verify.",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("Share Phone Number", request_contact=True)]],
+                resize_keyboard=True,
+                one_time_keyboard=True,
+            ),
         )
         return
 
@@ -423,6 +454,52 @@ async def _deliverFolder(update, context, folderId, token, user):
         conn.commit()
     except sqlite3.Error as e:
         logging.error(f"_deliverFolder log: {e}")
+
+
+async def contactHandler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles phone number shared via contact button."""
+    from telegram import ReplyKeyboardRemove # type: ignore
+    user    = update.effective_user
+    contact = update.message.contact
+
+    # Only accept contact from the user themselves
+    if contact.user_id != user.id:
+        await update.message.reply_text(
+            "<b>Invalid</b>\n\nPlease share your own phone number.",
+            parse_mode="HTML",
+        )
+        return
+
+    phone = contact.phone_number
+    try:
+        cursor.execute(
+            "UPDATE subscribers SET phone_verified=1, phone_number=? WHERE user_id=?",
+            (phone, user.id)
+        )
+        conn.commit()
+    except Exception as e:
+        logging.error(f"contactHandler: {e}")
+        await update.message.reply_text("A database error occurred. Please try again.")
+        return
+
+    custom = cursor.execute(
+        "SELECT value FROM bot_settings WHERE key='welcome_message'"
+    ).fetchone()
+    welcome_text = custom[0] if custom else (
+        f"<b>Hello, {user.first_name}</b>\n\n"
+        "Use the options below to get started.\n"
+        "If you have a private access link, open it directly to receive content."
+    )
+    await update.message.reply_text(
+        "<b>Phone Verified</b>\n\nYour number has been verified. You now have full access.",
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode="HTML",
+        reply_markup=kbUser(),
+    )
 
 
 async def cancelDeliveryCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
