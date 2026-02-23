@@ -345,7 +345,7 @@ async def verifyOtpEntry(update, context, text: str) -> bool:
         conn.commit()
         await update.message.reply_text(
             "<b>OTP Expired</b>\n\n"
-            "This OTP is no longer valid.\n"
+            "This OTP is no longer valid!\n"
             "Please request a new one from the admin.",
             parse_mode="HTML",
         )
