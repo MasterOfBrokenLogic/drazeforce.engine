@@ -6,9 +6,9 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
 from telegram.ext import ContextTypes  # type: ignore
 
-from config import cursor, conn, START_TIME, BOT_VERSION, BOT_CODENAME, ADMIN_ID
+from config import cursor, conn, START_TIME, BOT_VERSION, ADMIN_ID
 from helpers import isAdmin, isSuperAdmin, isBanned, fmtSize, fmtDt, fmtUptime
-from keyboards import kbHome, kbUser, kbMain
+from keyboards import kbHome, kbUser
 
 
 # ─────────────────────────────────────────────
@@ -22,20 +22,20 @@ async def cmdHelp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>Admin Commands</b>\n\n"
             "<code>/start</code>        Open the main control panel\n"
             "<code>/help</code>         Show this message\n"
-            "<code>/stats</code>        Upgraded analytics dashboard\n"
+            "<code>/stats</code>        Full analytics dashboard\n"
             "<code>/search</code>       Search folders by name\n"
             "<code>/quota</code>        Storage usage per folder\n"
             "<code>/purge</code>        Remove expired and revoked links\n"
             "<code>/export</code>       Export subscriber list as CSV\n"
             "<code>/status</code>       Bot health and uptime\n"
             "<code>/pin</code>          Send announcement to all subscribers\n"
-            "<code>/note</code>         Set folder note  —  /note FolderName text\n"
+            "<code>/note</code>         Add note to a folder  —  /note FolderName text\n"
             "<code>/welcome</code>      Set welcome message  —  /welcome text\n"
             "<code>/linkinfo</code>     Inspect a link  —  /linkinfo TOKEN\n"
-            "<code>/block</code>        List users and ban/unban interactively\n"
+            "<code>/block</code>        Interactive ban/unban manager\n"
             "<code>/broadcast</code>    Quick text broadcast\n"
-            "<code>/ban</code>          Ban by ID  —  /ban user_id reason\n"
-            "<code>/unban</code>        Unban by ID  —  /unban user_id\n"
+            "<code>/ban</code>          Ban a user  —  /ban user_id reason\n"
+            "<code>/unban</code>        Unban a user  —  /unban user_id\n"
             "<code>/myid</code>         Your account details\n"
             "<code>/cancel</code>       Cancel the current operation",
             parse_mode="HTML",
@@ -44,17 +44,17 @@ async def cmdHelp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "<b>Commands</b>\n\n"
-            "<code>/start</code>   Open the menu\n"
-            "<code>/help</code>    Show this message\n"
-            "<code>/myid</code>    Your account info\n"
-            "<code>/cancel</code>  Cancel current action",
+            "<code>/start</code>    Open the menu\n"
+            "<code>/help</code>     Show this message\n"
+            "<code>/myid</code>     Your account info\n"
+            "<code>/cancel</code>   Cancel current action",
             parse_mode="HTML",
             reply_markup=kbUser(),
         )
 
 
 # ─────────────────────────────────────────────
-#  /stats — upgraded
+#  /stats
 # ─────────────────────────────────────────────
 
 async def cmdStats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,29 +76,27 @@ async def cmdStats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "SELECT COUNT(*) FROM logs WHERE datetime(accessed_at) > datetime('now', '-1 day')"
         ).fetchone()[0]
         banned    = cursor.execute("SELECT COUNT(*) FROM banned_users").fetchone()[0]
-        topFolder = cursor.execute("""
-            SELECT f.name, COUNT(l.id) as cnt
-            FROM folders f JOIN logs l ON f.id = l.folder_id
+        topToday  = cursor.execute("""
+            SELECT f.name, COUNT(l.id) as cnt FROM folders f
+            JOIN logs l ON f.id = l.folder_id
             WHERE datetime(l.accessed_at) > datetime('now', '-1 day')
             GROUP BY f.id ORDER BY cnt DESC LIMIT 1
         """).fetchone()
-        topAllTime = cursor.execute("""
-            SELECT f.name, COUNT(l.id) as cnt
-            FROM folders f JOIN logs l ON f.id = l.folder_id
+        topAll    = cursor.execute("""
+            SELECT f.name, COUNT(l.id) as cnt FROM folders f
+            JOIN logs l ON f.id = l.folder_id
             GROUP BY f.id ORDER BY cnt DESC LIMIT 1
         """).fetchone()
-        activePolls = cursor.execute(
-            "SELECT COUNT(*) FROM polls WHERE status='open'"
-        ).fetchone()[0]
-        trending  = cursor.execute(
+        activePolls = cursor.execute("SELECT COUNT(*) FROM polls WHERE status='open'").fetchone()[0]
+        trending    = cursor.execute(
             "SELECT COUNT(*) FROM trending WHERE datetime(expires_at) > datetime('now')"
         ).fetchone()[0]
     except sqlite3.Error as e:
         await update.message.reply_text(f"Database error: {e}")
         return
 
-    top_today  = f"\n<code>Top today    :  {topFolder[0]}  ({topFolder[1]} opens)</code>" if topFolder else ""
-    top_all    = f"\n<code>Top all-time :  {topAllTime[0]}  ({topAllTime[1]} opens)</code>" if topAllTime else ""
+    top_today = f"\n<code>Top today    :  {topToday[0]}  ({topToday[1]} opens)</code>" if topToday else ""
+    top_all   = f"\n<code>Top all-time :  {topAll[0]}  ({topAll[1]} opens)</code>"   if topAll   else ""
 
     await update.message.reply_text(
         "<b>Analytics Dashboard</b>\n\n"
@@ -110,7 +108,7 @@ async def cmdStats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>Active links :  {lnk}</code>\n\n"
         "<b>Traffic</b>\n"
         f"<code>Total opens  :  {opens}</code>\n"
-        f"<code>Last 24h     :  {opens24h} opens</code>"
+        f"<code>Last 24h     :  {opens24h}</code>"
         f"{top_today}"
         f"{top_all}\n\n"
         "<b>Users</b>\n"
@@ -147,26 +145,25 @@ async def cmdSearch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         await update.message.reply_text(
-            "<b>Search Folders</b>\n\nUsage: <code>/search &lt;keyword&gt;</code>",
+            "<b>Search Folders</b>\n\nUsage: <code>/search keyword</code>",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     keyword = " ".join(context.args).strip()
     try:
         results = cursor.execute("""
             SELECT f.id, f.name, COUNT(fi.id), f.created_at,
-                   (SELECT COUNT(*) FROM links WHERE folder_id=f.id AND revoked=0 AND datetime(expiry) > datetime('now')) as active_links
+                   (SELECT COUNT(*) FROM links WHERE folder_id=f.id
+                    AND revoked=0 AND datetime(expiry) > datetime('now')) as active_links
             FROM folders f
             LEFT JOIN files fi ON f.id = fi.folder_id
             WHERE f.name LIKE ?
             GROUP BY f.id ORDER BY f.created_at DESC
         """, (f"%{keyword}%",)).fetchall()
-    except sqlite3.Error as e:
+    except sqlite3.Error:
         await update.message.reply_text("Database error during search.")
         return
-
     if not results:
         await update.message.reply_text(
             f"<b>No Results</b>\n\nNo folders matched <code>{keyword}</code>.",
@@ -174,14 +171,12 @@ async def cmdSearch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kbHome(),
         )
         return
-
     lines = [f"<b>Search Results</b>  |  \"{keyword}\"  |  {len(results)} found\n"]
     for fid, name, count, createdAt, activeLinks in results:
         lines.append(
             f"\n<code>{name}</code>\n"
             f"Files  :  {count}  |  Links  :  {activeLinks}  |  Created  :  {fmtDt(createdAt)}"
         )
-
     await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kbHome())
 
 
@@ -194,24 +189,21 @@ async def cmdQuota(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         rows  = cursor.execute("""
-            SELECT f.name, COUNT(fi.id), SUM(fi.file_size)
+            SELECT f.name, COUNT(fi.id), COALESCE(SUM(fi.file_size), 0)
             FROM folders f
             LEFT JOIN files fi ON f.id = fi.folder_id
-            GROUP BY f.id ORDER BY SUM(fi.file_size) DESC NULLS LAST LIMIT 20
+            GROUP BY f.id ORDER BY SUM(fi.file_size) DESC LIMIT 20
         """).fetchall()
-        total = cursor.execute("SELECT SUM(file_size) FROM files").fetchone()[0] or 0
+        total = cursor.execute("SELECT COALESCE(SUM(file_size), 0) FROM files").fetchone()[0]
     except sqlite3.Error:
         await update.message.reply_text("Failed to load quota data.")
         return
-
     if not rows:
         await update.message.reply_text("<b>Storage Quota</b>\n\nNo data available.", parse_mode="HTML", reply_markup=kbHome())
         return
-
     lines = [f"<b>Storage Quota</b>  |  Total: {fmtSize(total)}\n"]
     for name, count, size in rows:
         lines.append(f"\n<code>{name}</code>\nFiles  :  {count}   |   Size  :  {fmtSize(size)}")
-
     await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kbHome())
 
 
@@ -231,12 +223,11 @@ async def cmdPurge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except sqlite3.Error:
         await update.message.reply_text("Failed to purge links.")
         return
-
     await update.message.reply_text(
         "<b>Purge Complete</b>\n\n"
         f"<code>Expired removed  :  {expired}</code>\n"
         f"<code>Revoked removed  :  {revoked}</code>\n\n"
-        "Folders and files untouched.",
+        "Folders and files are untouched.",
         parse_mode="HTML",
         reply_markup=kbHome(),
     )
@@ -249,9 +240,7 @@ async def cmdPurge(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmdExport(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isAdmin(update.effective_user.id):
         return
-
     export_type = context.args[0].lower() if context.args else "subscribers"
-
     if export_type == "subscribers":
         try:
             rows = cursor.execute(
@@ -260,9 +249,8 @@ async def cmdExport(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except sqlite3.Error:
             await update.message.reply_text("Failed to export subscriber data.")
             return
-
-        output     = io.StringIO()
-        writer     = csv.writer(output)
+        output          = io.StringIO()
+        writer          = csv.writer(output)
         writer.writerow(["user_id", "username", "first_name", "subscribed_at", "last_active", "banned"])
         writer.writerows(rows)
         file_bytes      = io.BytesIO(output.getvalue().encode())
@@ -272,7 +260,6 @@ async def cmdExport(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=f"<b>Subscriber Export</b>\n\n{len(rows)} records exported.",
             parse_mode="HTML",
         )
-
     elif export_type == "logs":
         try:
             rows = cursor.execute(
@@ -281,15 +268,13 @@ async def cmdExport(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except sqlite3.Error:
             await update.message.reply_text("Failed to export logs.")
             return
-
-        output     = io.StringIO()
-        writer     = csv.writer(output)
+        output          = io.StringIO()
+        writer          = csv.writer(output)
         writer.writerow(["user_id", "username", "folder_id", "accessed_at"])
         writer.writerows(rows)
         file_bytes      = io.BytesIO(output.getvalue().encode())
         file_bytes.name = f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         await update.message.reply_document(file_bytes, caption=f"<b>Log Export</b>\n\n{len(rows)} records.", parse_mode="HTML")
-
     else:
         await update.message.reply_text(
             "<b>Export</b>\n\nUsage:\n<code>/export subscribers</code>\n<code>/export logs</code>",
@@ -311,7 +296,6 @@ async def cmdStatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_subs    = cursor.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
     except sqlite3.Error:
         db_folders = db_files = db_subs = "?"
-
     await update.message.reply_text(
         "<b>Bot Status</b>\n\n"
         f"<code>Name     :  Drazeforce</code>\n"
@@ -329,27 +313,25 @@ async def cmdStatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-#  /pin — announcement to all subscribers
+#  /pin
 # ─────────────────────────────────────────────
 
 async def cmdPin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(update.effective_user.id):
-        await update.message.reply_text("<b>Access Denied</b>\n\nOnly super admins can send announcements.", parse_mode="HTML")
+        await update.message.reply_text(
+            "<b>Access Denied</b>\n\nOnly the Super Admin can send announcements.",
+            parse_mode="HTML",
+        )
         return
-
     if not context.args:
         await update.message.reply_text(
-            "<b>Pin Announcement</b>\n\n"
-            "Usage: <code>/pin &lt;message text&gt;</code>\n\n"
-            "Sends to all active subscribers immediately.",
+            "<b>Pin Announcement</b>\n\nUsage: <code>/pin message text</code>\n\nSent immediately to all subscribers.",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     text    = " ".join(context.args)
     senders = cursor.execute("SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL").fetchall()
-
     sent = failed = 0
     for (uid,) in senders:
         if isAdmin(uid):
@@ -357,62 +339,50 @@ async def cmdPin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=uid,
-                text=f"📢 <b>Announcement</b>\n\n{text}",
+                text=f"<b>Announcement</b>\n\n{text}",
                 parse_mode="HTML",
             )
             sent += 1
         except Exception:
             failed += 1
-
     await update.message.reply_text(
-        f"<b>Announcement Sent</b>\n\n"
-        f"<code>Delivered  :  {sent}</code>\n"
-        f"<code>Failed     :  {failed}</code>",
+        f"<b>Announcement Sent</b>\n\n<code>Delivered  :  {sent}</code>\n<code>Failed     :  {failed}</code>",
         parse_mode="HTML",
         reply_markup=kbHome(),
     )
 
 
 # ─────────────────────────────────────────────
-#  /note — set folder note quickly
+#  /note
 # ─────────────────────────────────────────────
 
 async def cmdNote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isAdmin(update.effective_user.id):
         return
-
     if len(context.args) < 2:
         await update.message.reply_text(
             "<b>Set Folder Note</b>\n\n"
-            "Usage: <code>/note &lt;FolderName&gt; &lt;note text&gt;</code>\n\n"
-            "Example: <code>/note MyFolder This folder contains promo content</code>\n\n"
-            "To clear a note: <code>/note &lt;FolderName&gt; CLEAR</code>",
+            "Usage: <code>/note FolderName note text here</code>\n"
+            "To clear: <code>/note FolderName CLEAR</code>",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     folderName = context.args[0]
     noteText   = " ".join(context.args[1:])
-
-    folder = cursor.execute("SELECT id, name FROM folders WHERE name=?", (folderName,)).fetchone()
+    folder     = cursor.execute("SELECT id, name FROM folders WHERE name=?", (folderName,)).fetchone()
     if not folder:
-        # Try case-insensitive search
         folder = cursor.execute(
             "SELECT id, name FROM folders WHERE LOWER(name)=LOWER(?)", (folderName,)
         ).fetchone()
-
     if not folder:
         await update.message.reply_text(
-            f"<b>Folder Not Found</b>\n\n<code>{folderName}</code> does not exist.\n\n"
-            "Use /search to find the exact folder name.",
+            f"<b>Folder Not Found</b>\n\n<code>{folderName}</code> does not exist.\n\nUse /search to find the exact name.",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     folderId, exactName = folder
-
     if noteText.upper() == "CLEAR":
         cursor.execute("UPDATE folders SET note=NULL WHERE id=?", (folderId,))
         conn.commit()
@@ -434,31 +404,23 @@ async def cmdNote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-#  /welcome — set welcome message quickly
+#  /welcome
 # ─────────────────────────────────────────────
 
 async def cmdWelcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(update.effective_user.id):
         return
-
     if not context.args:
-        current = cursor.execute(
-            "SELECT value FROM bot_settings WHERE key='welcome_message'"
-        ).fetchone()
+        current = cursor.execute("SELECT value FROM bot_settings WHERE key='welcome_message'").fetchone()
         current_text = current[0] if current else "<i>Using default welcome message</i>"
         await update.message.reply_text(
-            "<b>Welcome Message</b>\n\n"
-            f"<b>Current:</b>\n{current_text}\n\n"
-            "<b>Usage:</b>\n"
-            "<code>/welcome &lt;new message text&gt;</code>\n"
-            "<code>/welcome RESET</code>  — restore default",
+            f"<b>Welcome Message</b>\n\n<b>Current:</b>\n{current_text}\n\n"
+            "<b>Usage:</b>\n<code>/welcome new message text</code>\n<code>/welcome RESET</code>  — restore default",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     text = " ".join(context.args)
-
     if text.upper() == "RESET":
         cursor.execute("DELETE FROM bot_settings WHERE key='welcome_message'")
         conn.commit()
@@ -480,26 +442,20 @@ async def cmdWelcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-#  /linkinfo TOKEN — inspect a link
+#  /linkinfo
 # ─────────────────────────────────────────────
 
 async def cmdLinkinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isAdmin(update.effective_user.id):
         return
-
     if not context.args:
         await update.message.reply_text(
-            "<b>Link Inspector</b>\n\n"
-            "Usage: <code>/linkinfo &lt;TOKEN&gt;</code>\n\n"
-            "The TOKEN is the last part of the link:\n"
-            "<code>https://t.me/YourBot?start=TOKEN</code>",
+            "<b>Link Inspector</b>\n\nUsage: <code>/linkinfo TOKEN</code>",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     token = context.args[0].strip()
-
     try:
         link = cursor.execute("""
             SELECT l.id, l.folder_id, f.name, l.expiry, l.revoked, l.single_use,
@@ -510,7 +466,6 @@ async def cmdLinkinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except sqlite3.Error as e:
         await update.message.reply_text(f"Database error: {e}")
         return
-
     if not link:
         await update.message.reply_text(
             "<b>Link Not Found</b>\n\nNo link matches that token.",
@@ -518,33 +473,25 @@ async def cmdLinkinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kbHome(),
         )
         return
-
     lid, folderId, folderName, expiry, revoked, singleUse, usedBy, usedAt, createdAt, accessCount = link
-
-    # Determine status
-    from datetime import datetime as dt
-    now = dt.now()
+    now = datetime.now()
     if revoked:
         status = "Revoked"
-    elif dt.fromisoformat(expiry) < now:
+    elif datetime.fromisoformat(expiry) < now:
         status = "Expired"
     else:
         status = "Active"
-
     if singleUse and usedBy:
-        status = "Used (Single-use redeemed)"
+        status = "Used (single-use redeemed)"
         usedByRow = cursor.execute(
             "SELECT username, first_name FROM subscribers WHERE user_id=?", (usedBy,)
         ).fetchone()
         usedByLabel = f"@{usedByRow[0]}" if usedByRow and usedByRow[0] else (usedByRow[1] if usedByRow else str(usedBy))
     else:
         usedByLabel = "N/A"
-
-    # Unique users from access log
     unique = cursor.execute(
         "SELECT COUNT(DISTINCT user_id) FROM link_access_log WHERE link_id=?", (lid,)
     ).fetchone()[0]
-
     await update.message.reply_text(
         f"<b>Link Inspector</b>\n\n"
         f"<code>Token      :  {token[:16]}...</code>\n"
@@ -563,13 +510,12 @@ async def cmdLinkinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-#  /block — interactive user ban/unban list
+#  /block
 # ─────────────────────────────────────────────
 
 async def cmdBlock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(update.effective_user.id):
         return
-
     try:
         users = cursor.execute("""
             SELECT s.user_id, s.username, s.first_name,
@@ -582,7 +528,6 @@ async def cmdBlock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except sqlite3.Error as e:
         await update.message.reply_text(f"Database error: {e}")
         return
-
     if not users:
         await update.message.reply_text(
             "<b>No Users</b>\n\nNo subscribers found.",
@@ -590,25 +535,19 @@ async def cmdBlock(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kbHome(),
         )
         return
-
     buttons = []
     for uid, username, firstName, isBannedFlag in users:
-        label  = username or firstName or str(uid)
+        label = username or firstName or str(uid)
         if isBannedFlag:
-            btn_label = f"✅ UNBAN  —  {label}"
+            btn_label = f"[BANNED] UNBAN — {label}"
             cb        = f"quickunban_{uid}"
         else:
-            btn_label = f"🚫 BAN  —  {label}"
+            btn_label = f"BAN — {label}"
             cb        = f"quickban_{uid}"
         buttons.append([InlineKeyboardButton(btn_label, callback_data=cb)])
-
     buttons.append([InlineKeyboardButton("Done", callback_data="back_main")])
-
     await update.message.reply_text(
-        f"<b>User Ban Manager</b>\n\n"
-        f"<code>Total shown  :  {len(users)}</code>\n\n"
-        "Tap to ban or unban instantly.\n"
-        "🚫 = active user   ✅ = currently banned",
+        f"<b>User Ban Manager</b>\n\n<code>Showing  :  {len(users)} user(s)</code>\n\nTap a name to toggle their ban status.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -620,38 +559,38 @@ async def quickBanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(query.from_user.id):
         return
     userId = int(query.data.replace("quickban_", ""))
-
+    if userId == ADMIN_ID or isSuperAdmin(userId):
+        await query.answer("Cannot ban a super admin.", show_alert=True)
+        return
     row      = cursor.execute("SELECT username, first_name FROM subscribers WHERE user_id=?", (userId,)).fetchone()
     username = (row[0] if row else None)
     name     = username or (row[1] if row else None) or str(userId)
-
     try:
         cursor.execute("""
             INSERT OR REPLACE INTO banned_users (user_id, username, reason, banned_at, banned_by)
             VALUES (?, ?, 'Banned via /block', ?, ?)
         """, (userId, username, datetime.now().isoformat(), query.from_user.id))
+        cursor.execute(
+            "UPDATE subscribers SET banned=1, ban_reason='Banned via /block' WHERE user_id=?", (userId,)
+        )
         conn.commit()
     except sqlite3.Error as e:
         await query.answer(f"Failed: {e}", show_alert=True)
         return
-
-    # Notify banned user immediately
     try:
         await context.bot.send_message(
             chat_id=userId,
             text="<b>Account Restricted</b>\n\n"
                  "Your access to this service has been restricted by an administrator.\n\n"
-                 "If you believe this is an error, contact the administrator directly.",
+                 "If you believe this is a mistake, please contact the administrator directly.",
             parse_mode="HTML",
         )
     except Exception:
         pass
-
-    # Update the button in place
     await query.edit_message_reply_markup(
         reply_markup=_rebuildBlockKeyboard(query.message.reply_markup, userId, banned=True)
     )
-    await query.answer(f"✅ {name} banned and notified.", show_alert=True)
+    await query.answer(f"{name} has been banned.", show_alert=True)
 
 
 async def quickUnbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -660,18 +599,15 @@ async def quickUnbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not isSuperAdmin(query.from_user.id):
         return
     userId = int(query.data.replace("quickunban_", ""))
-
     row  = cursor.execute("SELECT username, first_name FROM subscribers WHERE user_id=?", (userId,)).fetchone()
     name = (row[0] if row else None) or (row[1] if row else None) or str(userId)
-
     try:
         cursor.execute("DELETE FROM banned_users WHERE user_id=?", (userId,))
+        cursor.execute("UPDATE subscribers SET banned=0, ban_reason=NULL WHERE user_id=?", (userId,))
         conn.commit()
     except sqlite3.Error as e:
         await query.answer(f"Failed: {e}", show_alert=True)
         return
-
-    # Notify unbanned user immediately
     try:
         await context.bot.send_message(
             chat_id=userId,
@@ -682,15 +618,13 @@ async def quickUnbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
     except Exception:
         pass
-
     await query.edit_message_reply_markup(
         reply_markup=_rebuildBlockKeyboard(query.message.reply_markup, userId, banned=False)
     )
-    await query.answer(f"✅ {name} unbanned and notified.", show_alert=True)
+    await query.answer(f"{name} has been unbanned.", show_alert=True)
 
 
 def _rebuildBlockKeyboard(old_markup, changedUserId: int, banned: bool):
-    """Flip the button label for the user that was just banned/unbanned."""
     new_keyboard = []
     for row in old_markup.inline_keyboard:
         new_row = []
@@ -702,15 +636,13 @@ def _rebuildBlockKeyboard(old_markup, changedUserId: int, banned: bool):
             except ValueError:
                 new_row.append(btn)
                 continue
-
             if uid == changedUserId:
-                # Extract name from old label
-                parts = btn.text.split("  —  ", 1)
+                parts = btn.text.split(" — ", 1)
                 label = parts[1] if len(parts) > 1 else str(uid)
                 if banned:
-                    new_row.append(InlineKeyboardButton(f"✅ UNBAN  —  {label}", callback_data=f"quickunban_{uid}"))
+                    new_row.append(InlineKeyboardButton(f"[BANNED] UNBAN — {label}", callback_data=f"quickunban_{uid}"))
                 else:
-                    new_row.append(InlineKeyboardButton(f"🚫 BAN  —  {label}", callback_data=f"quickban_{uid}"))
+                    new_row.append(InlineKeyboardButton(f"BAN — {label}", callback_data=f"quickban_{uid}"))
             else:
                 new_row.append(btn)
         new_keyboard.append(new_row)
@@ -718,7 +650,7 @@ def _rebuildBlockKeyboard(old_markup, changedUserId: int, banned: bool):
 
 
 # ─────────────────────────────────────────────
-#  /broadcast (text shortcut)
+#  /broadcast (quick text)
 # ─────────────────────────────────────────────
 
 async def cmdBroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -726,15 +658,13 @@ async def cmdBroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         await update.message.reply_text(
-            "<b>Quick Broadcast</b>\n\nUsage: <code>/broadcast &lt;message&gt;</code>",
+            "<b>Quick Broadcast</b>\n\nUsage: <code>/broadcast message text here</code>",
             parse_mode="HTML",
             reply_markup=kbHome(),
         )
         return
-
     text    = " ".join(context.args)
     targets = cursor.execute("SELECT user_id FROM subscribers WHERE banned=0 OR banned IS NULL").fetchall()
-
     sent = failed = 0
     for (uid,) in targets:
         if isAdmin(uid):
@@ -744,7 +674,6 @@ async def cmdBroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception:
             failed += 1
-
     await update.message.reply_text(
         f"<b>Broadcast Complete</b>\n\n<code>Sent    :  {sent}</code>\n<code>Failed  :  {failed}</code>",
         parse_mode="HTML",
@@ -760,14 +689,20 @@ async def cmdBan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("<b>Ban User</b>\n\nUsage: <code>/ban &lt;user_id&gt; [reason]</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "<b>Ban User</b>\n\nUsage: <code>/ban user_id reason</code>",
+            parse_mode="HTML",
+        )
         return
-
     try:
         target_id = int(context.args[0])
         reason    = " ".join(context.args[1:]) if len(context.args) > 1 else None
     except ValueError:
         await update.message.reply_text("Invalid user ID. Must be a number.")
+        return
+
+    if target_id == ADMIN_ID or isSuperAdmin(target_id):
+        await update.message.reply_text("You cannot ban a super admin.", parse_mode="HTML")
         return
 
     try:
@@ -777,16 +712,25 @@ async def cmdBan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             INSERT OR REPLACE INTO banned_users (user_id, username, reason, banned_at, banned_by)
             VALUES (?, ?, ?, ?, ?)
         """, (target_id, username, reason, datetime.now().isoformat(), update.effective_user.id))
+        cursor.execute(
+            "UPDATE subscribers SET banned=1, ban_reason=? WHERE user_id=?",
+            (reason, target_id)
+        )
         conn.commit()
         await update.message.reply_text(
-            f"<b>User Banned</b>\n\n<code>User ID  :  {target_id}</code>\n<code>Reason   :  {reason or 'Not specified'}</code>",
-            parse_mode="HTML", reply_markup=kbHome(),
+            f"<b>User Banned</b>\n\n"
+            f"<code>User ID  :  {target_id}</code>\n"
+            f"<code>Reason   :  {reason or 'Not specified'}</code>",
+            parse_mode="HTML",
+            reply_markup=kbHome(),
         )
         try:
             reason_text = f"\n<code>Reason  :  {reason}</code>" if reason else ""
             await context.bot.send_message(
                 chat_id=target_id,
-                text=f"<b>Account Restricted</b>\n\nYour access to this service has been restricted by an administrator.{reason_text}\n\nIf you believe this is an error, contact the administrator directly.",
+                text=f"<b>Account Restricted</b>\n\n"
+                     f"Your access to this service has been restricted by an administrator.{reason_text}\n\n"
+                     "If you believe this is a mistake, please contact the administrator directly.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -803,25 +747,30 @@ async def cmdUnban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isSuperAdmin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("<b>Unban User</b>\n\nUsage: <code>/unban &lt;user_id&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "<b>Unban User</b>\n\nUsage: <code>/unban user_id</code>",
+            parse_mode="HTML",
+        )
         return
-
     try:
         target_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Invalid user ID.")
+        await update.message.reply_text("Invalid user ID. Must be a number.")
         return
-
     cursor.execute("DELETE FROM banned_users WHERE user_id=?", (target_id,))
+    cursor.execute("UPDATE subscribers SET banned=0, ban_reason=NULL WHERE user_id=?", (target_id,))
     conn.commit()
     await update.message.reply_text(
         f"<b>User Unbanned</b>\n\n<code>{target_id}</code> removed from ban list.",
-        parse_mode="HTML", reply_markup=kbHome(),
+        parse_mode="HTML",
+        reply_markup=kbHome(),
     )
     try:
         await context.bot.send_message(
             chat_id=target_id,
-            text="<b>Access Restored</b>\n\nYour access to this service has been reinstated by an administrator.\n\nYou can now use the bot normally again.",
+            text="<b>Access Restored</b>\n\n"
+                 "Your access to this service has been reinstated by an administrator.\n\n"
+                 "You can now use the bot normally again.",
             parse_mode="HTML",
         )
     except Exception:
@@ -835,12 +784,10 @@ async def cmdUnban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmdMyId(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user   = update.effective_user
     userId = user.id
-
     sub              = cursor.execute("SELECT subscribed_at, last_active FROM subscribers WHERE user_id=?", (userId,)).fetchone()
     banned           = cursor.execute("SELECT reason FROM banned_users WHERE user_id=?", (userId,)).fetchone()
     folders_accessed = cursor.execute("SELECT COUNT(*) FROM logs WHERE user_id=?", (userId,)).fetchone()[0]
     admin_row        = cursor.execute("SELECT is_super_admin, added_at FROM admins WHERE user_id=?", (userId,)).fetchone()
-
     lines = [
         "<b>Your Account</b>\n",
         f"<code>User ID     :  {userId}</code>",
@@ -850,20 +797,16 @@ async def cmdMyId(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sub:
         lines.append(f"<code>Joined      :  {fmtDt(sub[0])}</code>")
         lines.append(f"<code>Last active :  {fmtDt(sub[1])}</code>")
-
     lines.append(f"<code>Folders opened  :  {folders_accessed}</code>")
-
     if admin_row:
         role = "Super Admin" if admin_row[0] else "Admin"
         lines.append(f"<code>Role        :  {role}</code>")
         lines.append(f"<code>Admin since :  {fmtDt(admin_row[1])}</code>")
-
     if banned:
         lines.append(f"\n<code>Status  :  BANNED</code>")
         lines.append(f"<code>Reason  :  {banned[0] or 'Not specified'}</code>")
     else:
         lines.append(f"<code>Status  :  Active</code>")
-
     await update.message.reply_text(
         "\n".join(lines),
         parse_mode="HTML",

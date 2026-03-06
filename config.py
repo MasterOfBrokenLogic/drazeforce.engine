@@ -32,25 +32,50 @@ logging.basicConfig(
 )
 
 # ─────────────────────────────────────────────
-#  DATABASE
+#  DATABASE PATH — persistent across restarts
 # ─────────────────────────────────────────────
 
-# Always use absolute path — prevents creating different bot.db files
-# depending on what directory the bot is launched from
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH   = os.environ.get("DB_PATH", "/data/bot.db")
+# Priority:
+#   1. DB_PATH env var (Railway sets this pointing to the mounted volume)
+#   2. /data/bot.db  (Railway volume default)
+#   3. ./bot.db next to this file (local development fallback)
+#
+# The key fix: we NEVER store the db inside a directory that gets wiped on
+# redeploy.  On Railway add a Volume mounted at /data and set
+# DB_PATH=/data/bot.db in your Variables tab.
 
-# Ensure the data directory exists (Railway volume or local fallback)
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_DATA_DIR = "/data"
+_LOCAL_FALLBACK   = os.path.join(_BASE_DIR, "bot.db")
+
+if os.getenv("DB_PATH"):
+    DB_PATH = os.getenv("DB_PATH")
+elif os.path.isdir(_DEFAULT_DATA_DIR) or os.access(os.path.dirname(_DEFAULT_DATA_DIR), os.W_OK):
+    DB_PATH = os.path.join(_DEFAULT_DATA_DIR, "bot.db")
+else:
+    # Local dev — store right next to the source files
+    DB_PATH = _LOCAL_FALLBACK
+
+# Make sure the containing directory exists
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
+
+logging.info(f"Database path: {DB_PATH}")
 
 conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 
-# WAL mode = much safer writes, survives crashes without data loss
+# WAL mode — safe concurrent writes, survives crashes
 conn.execute("PRAGMA journal_mode=WAL")
 conn.execute("PRAGMA synchronous=NORMAL")
+conn.execute("PRAGMA foreign_keys=ON")
 conn.commit()
 
 cursor = conn.cursor()
+
+# ─────────────────────────────────────────────
+#  SCHEMA
+# ─────────────────────────────────────────────
 
 cursor.executescript("""
 PRAGMA journal_mode=WAL;
@@ -64,7 +89,11 @@ CREATE TABLE IF NOT EXISTS folders (
     auto_delete_minutes INTEGER,
     password            TEXT,
     note                TEXT,
-    pinned              INTEGER DEFAULT 0
+    pinned              INTEGER DEFAULT 0,
+    is_secret           INTEGER DEFAULT 0,
+    secret_code         TEXT,
+    otp_required        INTEGER DEFAULT 0,
+    otp_expiry_minutes  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -84,7 +113,10 @@ CREATE TABLE IF NOT EXISTS links (
     expiry       TEXT,
     revoked      INTEGER DEFAULT 0,
     created_at   TEXT,
-    access_count INTEGER DEFAULT 0
+    access_count INTEGER DEFAULT 0,
+    single_use   INTEGER DEFAULT 0,
+    used_by      INTEGER,
+    used_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -105,14 +137,16 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 
 CREATE TABLE IF NOT EXISTS subscribers (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER UNIQUE,
-    username      TEXT,
-    first_name    TEXT,
-    subscribed_at TEXT,
-    last_active   TEXT,
-    banned        INTEGER DEFAULT 0,
-    ban_reason    TEXT
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER UNIQUE,
+    username       TEXT,
+    first_name     TEXT,
+    subscribed_at  TEXT,
+    last_active    TEXT,
+    banned         INTEGER DEFAULT 0,
+    ban_reason     TEXT,
+    phone_verified INTEGER DEFAULT 0,
+    phone_number   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS broadcasts (
@@ -184,44 +218,6 @@ CREATE TABLE IF NOT EXISTS pinned_messages (
     pinned_at  TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_folder_name      ON folders(name);
-CREATE INDEX IF NOT EXISTS idx_link_token       ON links(token);
-CREATE INDEX IF NOT EXISTS idx_admin_user       ON admins(user_id);
-CREATE INDEX IF NOT EXISTS idx_logs_folder      ON logs(folder_id);
-CREATE INDEX IF NOT EXISTS idx_subscriber_user  ON subscribers(user_id);
-CREATE INDEX IF NOT EXISTS idx_broadcast_code   ON broadcasts(broadcast_code);
-CREATE INDEX IF NOT EXISTS idx_user_message_id  ON user_messages(message_id);
-CREATE INDEX IF NOT EXISTS idx_msg_recipient    ON user_messages(recipient_admin_id);
-CREATE INDEX IF NOT EXISTS idx_banned_user      ON banned_users(user_id);
-""")
-
-# Seed super admin
-cursor.execute("""
-    INSERT OR IGNORE INTO admins (user_id, username, added_by, added_at, is_super_admin)
-    VALUES (?, 'Super Admin', ?, ?, 1)
-""", (ADMIN_ID, ADMIN_ID, datetime.now().isoformat()))
-conn.commit()
-
-# ── Schema migrations for existing DBs ──
-_migrations = [
-    ("user_messages",  "recipient_admin_id", "INTEGER", "NULL"),
-    ("user_messages",  "recipient_is_super",  "INTEGER", "0"),
-    ("folders",        "note",                "TEXT",    "NULL"),
-    ("folders",        "pinned",              "INTEGER", "0"),
-    ("subscribers",    "banned",              "INTEGER", "0"),
-    ("subscribers",    "ban_reason",          "TEXT",    "NULL"),
-    ("broadcasts",     "scheduled_for",       "TEXT",    "NULL"),
-    ("broadcasts",     "status",              "TEXT",    "'sent'"),
-]
-for _tbl, _col, _type, _default in _migrations:
-    try:
-        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
-# ── v3.0 schema additions ──
-_v3_script = """
 CREATE TABLE IF NOT EXISTS polls (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     question    TEXT,
@@ -248,6 +244,7 @@ CREATE TABLE IF NOT EXISTS poll_votes (
 CREATE TABLE IF NOT EXISTS quotes (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     text      TEXT,
+    author    TEXT,
     added_by  INTEGER,
     added_at  TEXT,
     last_sent TEXT
@@ -277,11 +274,6 @@ CREATE TABLE IF NOT EXISTS link_access_log (
     accessed_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_poll_votes  ON poll_votes(poll_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_trending    ON trending(folder_id);
-CREATE INDEX IF NOT EXISTS idx_link_access ON link_access_log(link_id);
-CREATE INDEX IF NOT EXISTS idx_quotes      ON quotes(last_sent);
-
 CREATE TABLE IF NOT EXISTS message_replies (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     reply_id      TEXT    UNIQUE,
@@ -294,48 +286,13 @@ CREATE TABLE IF NOT EXISTS message_replies (
 );
 
 CREATE TABLE IF NOT EXISTS message_reply_files (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    reply_id   TEXT,
-    file_id    TEXT,
-    file_type  TEXT,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    reply_id     TEXT,
+    file_id      TEXT,
+    file_type    TEXT,
     text_content TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_reply_msg   ON message_replies(message_id);
-CREATE INDEX IF NOT EXISTS idx_reply_user  ON message_replies(to_user_id);
-CREATE INDEX IF NOT EXISTS idx_reply_files ON message_reply_files(reply_id);
-"""
-cursor.executescript(_v3_script)
-conn.commit()
-
-# ── v3.0 column migrations ──
-_v3_migrations = [
-    ("links",   "single_use",  "INTEGER", "0"),
-    ("links",   "used_by",     "INTEGER", "NULL"),
-    ("links",   "used_at",     "TEXT",    "NULL"),
-    ("folders", "is_secret",   "INTEGER", "0"),
-    ("folders", "secret_code", "TEXT",    "NULL"),
-]
-for _tbl, _col, _type, _default in _v3_migrations:
-    try:
-        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
-# ── v3.1 column migrations ──
-_v31_migrations = [
-    ("quotes", "author", "TEXT", "NULL"),
-]
-for _tbl, _col, _type, _default in _v31_migrations:
-    try:
-        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
-# ── v4.0 schema additions ──
-_v4_script = """
 CREATE TABLE IF NOT EXISTS folder_otps (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     folder_id   INTEGER,
@@ -345,22 +302,69 @@ CREATE TABLE IF NOT EXISTS folder_otps (
     expires_at  TEXT,
     status      TEXT DEFAULT 'pending'
 );
-CREATE INDEX IF NOT EXISTS idx_otp_folder_user ON folder_otps(folder_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_otp_status      ON folder_otps(status);
-"""
-cursor.executescript(_v4_script)
+
+CREATE TABLE IF NOT EXISTS shortened_links (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    short_code   TEXT UNIQUE,
+    original_url TEXT,
+    created_by   INTEGER,
+    created_at   TEXT,
+    clicks       INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_folder_name      ON folders(name);
+CREATE INDEX IF NOT EXISTS idx_link_token       ON links(token);
+CREATE INDEX IF NOT EXISTS idx_admin_user       ON admins(user_id);
+CREATE INDEX IF NOT EXISTS idx_logs_folder      ON logs(folder_id);
+CREATE INDEX IF NOT EXISTS idx_subscriber_user  ON subscribers(user_id);
+CREATE INDEX IF NOT EXISTS idx_broadcast_code   ON broadcasts(broadcast_code);
+CREATE INDEX IF NOT EXISTS idx_user_message_id  ON user_messages(message_id);
+CREATE INDEX IF NOT EXISTS idx_msg_recipient    ON user_messages(recipient_admin_id);
+CREATE INDEX IF NOT EXISTS idx_banned_user      ON banned_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_poll_votes       ON poll_votes(poll_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_trending         ON trending(folder_id);
+CREATE INDEX IF NOT EXISTS idx_link_access      ON link_access_log(link_id);
+CREATE INDEX IF NOT EXISTS idx_quotes           ON quotes(last_sent);
+CREATE INDEX IF NOT EXISTS idx_reply_msg        ON message_replies(message_id);
+CREATE INDEX IF NOT EXISTS idx_reply_user       ON message_replies(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_reply_files      ON message_reply_files(reply_id);
+CREATE INDEX IF NOT EXISTS idx_otp_folder_user  ON folder_otps(folder_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_otp_status       ON folder_otps(status);
+""")
+
+# Seed super admin
+cursor.execute("""
+    INSERT OR IGNORE INTO admins (user_id, username, added_by, added_at, is_super_admin)
+    VALUES (?, 'Super Admin', ?, ?, 1)
+""", (ADMIN_ID, ADMIN_ID, datetime.now().isoformat()))
 conn.commit()
 
-# ── v4.0 folder column migrations ──
-_v4_folder_migrations = [
-    ("folders",     "otp_required",       "INTEGER", "0"),
-    ("folders",     "otp_expiry_minutes", "INTEGER", "NULL"),
-    ("subscribers", "phone_verified",     "INTEGER", "0"),
-    ("subscribers", "phone_number",       "TEXT",    "NULL"),
+# ── Safe column migrations for pre-existing databases ──────────────────────
+_migrations = [
+    ("user_messages",  "recipient_admin_id",  "INTEGER", "NULL"),
+    ("user_messages",  "recipient_is_super",   "INTEGER", "0"),
+    ("folders",        "note",                 "TEXT",    "NULL"),
+    ("folders",        "pinned",               "INTEGER", "0"),
+    ("folders",        "is_secret",            "INTEGER", "0"),
+    ("folders",        "secret_code",          "TEXT",    "NULL"),
+    ("folders",        "otp_required",         "INTEGER", "0"),
+    ("folders",        "otp_expiry_minutes",   "INTEGER", "NULL"),
+    ("subscribers",    "banned",               "INTEGER", "0"),
+    ("subscribers",    "ban_reason",           "TEXT",    "NULL"),
+    ("subscribers",    "phone_verified",       "INTEGER", "0"),
+    ("subscribers",    "phone_number",         "TEXT",    "NULL"),
+    ("broadcasts",     "scheduled_for",        "TEXT",    "NULL"),
+    ("broadcasts",     "status",               "TEXT",    "'sent'"),
+    ("links",          "single_use",           "INTEGER", "0"),
+    ("links",          "used_by",              "INTEGER", "NULL"),
+    ("links",          "used_at",              "TEXT",    "NULL"),
+    ("quotes",         "author",               "TEXT",    "NULL"),
 ]
-for _tbl, _col, _type, _default in _v4_folder_migrations:
+for _tbl, _col, _type, _default in _migrations:
     try:
         cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type} DEFAULT {_default}")
         conn.commit()
     except sqlite3.OperationalError:
-        pass
+        pass  # column already exists — fine
+
+logging.info("Database initialised successfully.")

@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes  # type: ignore
 
 from config import conn, cursor, ADMIN_ID
 from helpers import isAdmin, isSuperAdmin, safeEdit, fmtDt
-from keyboards import kbAdminPanel, kbHome, kbBack, kbMain
+from keyboards import kbAdminPanel, kbHome, kbBack
 
 
 # ─────────────────────────────────────────────
@@ -27,8 +27,7 @@ async def adminMenuCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await safeEdit(
         query,
-        "<b>Admin Panel</b>\n\n"
-        "Manage administrator accounts and user access controls.",
+        "<b>Admin Panel</b>\n\nManage administrator accounts and user access controls.",
         markup=kbAdminPanel(),
         parse_mode="HTML",
     )
@@ -45,9 +44,10 @@ async def addAdminCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safeEdit(
         query,
         "<b>Add Administrator</b>\n\n"
-        "Forward a message from the target user, or send their numeric Telegram User ID.\n\n"
-        "<code>Method 1</code>  Forward any message from the user\n"
-        "<code>Method 2</code>  Send their numeric user ID directly",
+        "To add an admin, use one of these methods:\n\n"
+        "<code>Method 1</code>  Forward any message from the target user\n"
+        "<code>Method 2</code>  Type their numeric Telegram User ID directly\n\n"
+        "The user must have started this bot at least once.",
         markup=kbBack("admin_menu"),
         parse_mode="HTML",
     )
@@ -67,14 +67,13 @@ async def listAdminsCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     buttons = []
     for userId, username, addedAt, isSuper in admins:
         tag   = "[Super]  " if isSuper else "[Admin]  "
-        label = f"{tag}{username or 'Unknown'}"
+        label = f"{tag}{username or str(userId)}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"admin_info_{userId}")])
     buttons.append([InlineKeyboardButton("Back", callback_data="admin_menu")])
 
     await safeEdit(
         query,
-        f"<b>Administrators</b>  |  {len(admins)} registered\n\n"
-        "Select a name to view details.",
+        f"<b>Administrators</b>  |  {len(admins)} total\n\nTap a name to view details.",
         markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
     )
@@ -95,10 +94,10 @@ async def adminInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safeEdit(
         query,
         "<b>Admin Details</b>\n\n"
-        f"<code>Name    :  {username or 'N/A'}</code>\n"
-        f"<code>Role    :  {role}</code>\n"
-        f"<code>User ID :  {uid}</code>\n"
-        f"<code>Added   :  {fmtDt(addedAt)}</code>",
+        f"<code>Name     :  {username or 'N/A'}</code>\n"
+        f"<code>Role     :  {role}</code>\n"
+        f"<code>User ID  :  {uid}</code>\n"
+        f"<code>Added    :  {fmtDt(addedAt)}</code>",
         markup=kbBack("list_admins"),
         parse_mode="HTML",
     )
@@ -115,7 +114,12 @@ async def removeAdminCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         "SELECT user_id, username FROM admins WHERE user_id != ? AND is_super_admin = 0", (ADMIN_ID,)
     ).fetchall()
     if not admins:
-        await safeEdit(query, "No removable admins found.", markup=kbBack("admin_menu"))
+        await safeEdit(
+            query,
+            "<b>No Admins to Remove</b>\n\nThere are no regular admins to demote.",
+            markup=kbBack("admin_menu"),
+            parse_mode="HTML",
+        )
         return
     buttons = [
         [InlineKeyboardButton(username or str(uid), callback_data=f"remove_admin_{uid}")]
@@ -124,8 +128,7 @@ async def removeAdminCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     buttons.append([InlineKeyboardButton("Back", callback_data="admin_menu")])
     await safeEdit(
         query,
-        "<b>Remove Administrator</b>\n\n"
-        "Select the admin you want to demote.",
+        "<b>Remove Administrator</b>\n\nSelect the admin you want to demote to regular user.",
         markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
     )
@@ -135,13 +138,29 @@ async def removeAdminConfirmCallback(update: Update, context: ContextTypes.DEFAU
     query  = update.callback_query
     await query.answer()
     userId = int(query.data.replace("remove_admin_", ""))
+
+    # Get admin info before deleting
+    adminRow = cursor.execute(
+        "SELECT username FROM admins WHERE user_id=? AND is_super_admin=0", (userId,)
+    ).fetchone()
+    if not adminRow:
+        await safeEdit(query, "Admin not found or cannot be removed.", markup=kbBack("admin_menu"))
+        return
+
+    username = adminRow[0]
+
+    # Who is doing the demoting
+    demotedByRow  = cursor.execute("SELECT username FROM admins WHERE user_id=?", (query.from_user.id,)).fetchone()
+    demotedByName = (demotedByRow[0] if demotedByRow else None) or f"Admin {query.from_user.id}"
+
     try:
         cursor.execute("DELETE FROM admins WHERE user_id=? AND is_super_admin=0", (userId,))
         conn.commit()
+        displayName = f"@{username}" if username else str(userId)
         await safeEdit(
             query,
             f"<b>Admin Removed</b>\n\n"
-            f"<code>{userId}</code> has been removed from the admin list.",
+            f"<code>{displayName}</code> has been demoted to regular user and has been notified.",
             markup=kbBack("admin_menu"),
             parse_mode="HTML",
         )
@@ -149,8 +168,9 @@ async def removeAdminConfirmCallback(update: Update, context: ContextTypes.DEFAU
         try:
             await context.bot.send_message(
                 chat_id=userId,
-                text="<b>Admin Access Removed</b>\n\n"
-                     "Your administrator access has been revoked.\n\n"
+                text=f"<b>Admin Access Removed</b>\n\n"
+                     f"<code>Removed by  :  @{demotedByName}</code>\n\n"
+                     "Your administrator access to this bot has been revoked.\n"
                      "You can still use the bot as a regular user.",
                 parse_mode="HTML",
             )
@@ -172,8 +192,8 @@ async def banUserCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safeEdit(
         query,
         "<b>Ban User</b>\n\n"
-        "Send the numeric User ID of the account you want to restrict.\n\n"
-        "Banned users cannot access any links or contact admins.",
+        "Send the numeric Telegram User ID of the account you want to restrict.\n\n"
+        "Banned users cannot access any links, request OTPs, vote on polls, or contact admins.",
         markup=kbBack("admin_menu"),
         parse_mode="HTML",
     )
@@ -208,8 +228,7 @@ async def bannedListCallback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await safeEdit(
         query,
-        f"<b>Banned Users</b>  |  {len(bans)} total\n\n"
-        "Tap a name to view details or unban.",
+        f"<b>Banned Users</b>  |  {len(bans)} total\n\nTap a name to view details or unban.",
         markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
     )
@@ -234,8 +253,8 @@ async def banInfoCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>Reason   :  {reason or 'Not specified'}</code>\n"
         f"<code>Banned   :  {fmtDt(bannedAt)}</code>",
         markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Unban", callback_data=f"unban_{uid}")],
-            [InlineKeyboardButton("Back", callback_data="banned_list")],
+            [InlineKeyboardButton("Unban This User", callback_data=f"unban_{uid}")],
+            [InlineKeyboardButton("Back",            callback_data="banned_list")],
         ]),
         parse_mode="HTML",
     )
@@ -246,7 +265,11 @@ async def unbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     userId = int(query.data.replace("unban_", ""))
     try:
+        # Remove from both tables
         cursor.execute("DELETE FROM banned_users WHERE user_id=?", (userId,))
+        cursor.execute(
+            "UPDATE subscribers SET banned=0, ban_reason=NULL WHERE user_id=?", (userId,)
+        )
         conn.commit()
         await safeEdit(
             query,
@@ -255,7 +278,6 @@ async def unbanCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             markup=kbBack("admin_menu"),
             parse_mode="HTML",
         )
-        # Notify the unbanned user
         try:
             await context.bot.send_message(
                 chat_id=userId,
